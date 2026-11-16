@@ -1423,7 +1423,7 @@ svg {
 
 .gap-custom {
   margin-top: 12px;
-  padding: 12px;
+  padding: 10px;
   border-radius: var(--r-md);
   border: 1px solid rgba(124, 92, 255, 0.24);
   background: rgba(124, 92, 255, 0.06);
@@ -1438,20 +1438,33 @@ svg {
 .gap-custom__row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px 4px;
 }
 
 .gap-custom__cap {
-  flex: 0 0 32px;
+  flex: 0 0 30px;
   font-size: 12px;
   font-weight: 600;
   color: var(--text-3);
 }
 
+.gap-custom__field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.gap-custom__suffix {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
 .gap-custom__num {
-  width: 84px;
+  width: 42px;
   height: 30px;
-  padding: 0 10px;
+  padding: 0 6px;
+  text-align: center;
   border-radius: 9px;
   border: 1px solid var(--line);
   background: var(--surface-sunk);
@@ -1465,36 +1478,6 @@ svg {
 .gap-custom__num:focus {
   border-color: rgba(124, 92, 255, 0.62);
   box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.16);
-}
-
-.gap-custom__unit {
-  height: 30px;
-  padding: 0 26px 0 10px;
-  border-radius: 9px;
-  border: 1px solid var(--line);
-  background: var(--surface-sunk);
-  color: var(--text-2);
-  font-size: 12.5px;
-  font-weight: 500;
-  cursor: pointer;
-  outline: 0;
-  -webkit-appearance: none;
-  appearance: none;
-  background-image: linear-gradient(45deg, transparent 50%, var(--text-3) 50%),
-    linear-gradient(135deg, var(--text-3) 50%, transparent 50%);
-  background-position: calc(100% - 14px) 13px, calc(100% - 9px) 13px;
-  background-size: 5px 5px, 5px 5px;
-  background-repeat: no-repeat;
-}
-
-.gap-custom__unit:focus {
-  border-color: rgba(124, 92, 255, 0.62);
-  box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.16);
-}
-
-.gap-custom__unit option {
-  background: #171a22;
-  color: var(--text);
 }
 
 .gap-custom__hint {
