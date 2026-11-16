@@ -24,6 +24,15 @@ namespace SAM.Modern
         private bool _schemaLoaded;
         private bool _requesting;
 
+        // 随机解锁（按随机间隔逐个解锁，Steam 才会为每个成就记录不同的真实时间）
+        private readonly Timer _unlockTimer;
+        private readonly List<string> _unlockQueue = new List<string>();
+        private readonly Random _unlockRandom = new Random();
+        private int _unlockIndex;
+        private int _unlockMinGap = 15;
+        private int _unlockMaxGap = 45;
+        private bool _unlockRunning;
+
         public GameForm(SteamHost host, long appId)
             : base("SAM Modern  ·  成就管理")
         {
@@ -44,6 +53,10 @@ namespace SAM.Modern
             this._pumpTimer.Interval = 250;
             this._pumpTimer.Tick += delegate { this._host.Pump(); };
             this._pumpTimer.Start();
+
+            this._unlockTimer = new Timer();
+            this._unlockTimer.Tick += this.OnUnlockTick;
+
             Log.Write("GameForm ctor end");
         }
 
@@ -242,6 +255,12 @@ namespace SAM.Modern
                 case "game/invertAll":
                     this.BulkInvert();
                     return;
+                case "game/unlockRandom":
+                    this.StartRandomUnlock(message);
+                    return;
+                case "game/unlockRandom/cancel":
+                    this.CancelRandomUnlock(true);
+                    return;
             }
             base.OnCommand(cmd, message);
         }
@@ -293,6 +312,230 @@ namespace SAM.Modern
             }
 
             this.CommitStore(changed, 0);
+        }
+
+        /* ---------------------------------------------------------------------
+           随机解锁：Steam 不提供写入历史解锁时间的接口，唯一能让成就拥有
+           「不同解锁时间」的办法是按真实时间逐个解锁 —— 每解锁一个就保存一次，
+           Steam 便以当前真实时间分别记录它们。
+           --------------------------------------------------------------------- */
+
+        private void StartRandomUnlock(Dictionary<string, object> message)
+        {
+            if (this._unlockRunning)
+            {
+                this.Channel.Toast("info", "已经有一轮随机解锁在进行",
+                    "请等待当前这一轮结束，或先点击「停止」。");
+                return;
+            }
+
+            if (this._schemaLoaded == false)
+            {
+                this.Channel.Toast("warn", "数据还没准备好", "请等待成就数据加载完成后再试。");
+                return;
+            }
+
+            int count = (int)Math.Round(JsonParser.GetNumber(message, "count", 0));
+            int minGap = (int)Math.Round(JsonParser.GetNumber(message, "minGap", 15));
+            int maxGap = (int)Math.Round(JsonParser.GetNumber(message, "maxGap", 45));
+            int delay = (int)Math.Round(JsonParser.GetNumber(message, "delay", 5));
+
+            if (minGap < 1) minGap = 1;
+            if (minGap > 3600) minGap = 3600;
+            if (maxGap < minGap) maxGap = minGap;
+            if (maxGap > 3600) maxGap = 3600;
+            if (delay < 0) delay = 0;
+            if (delay > 3600) delay = 3600;
+
+            var api = this._host.Client.SteamUserStats;
+            var candidates = new List<string>();
+            foreach (var def in this._definitions)
+            {
+                if ((def.Permission & 3) != 0) continue;
+                bool current = false;
+                try { if (api.GetAchievement(def.Id, out current) == false) continue; }
+                catch (Exception error) { Log.Write("GetAchievement failed: " + def.Id, error); continue; }
+                if (current) continue;
+                candidates.Add(def.Id);
+            }
+
+            if (candidates.Count == 0)
+            {
+                this.Channel.Toast("info", "没有可解锁的成就", "该游戏所有可修改的成就都已经解锁了。");
+                return;
+            }
+
+            // 顺序也打乱，看起来才像「随机」
+            for (int i = candidates.Count - 1; i > 0; i--)
+            {
+                int j = this._unlockRandom.Next(i + 1);
+                string tmp = candidates[i];
+                candidates[i] = candidates[j];
+                candidates[j] = tmp;
+            }
+            if (count > 0 && count < candidates.Count)
+            {
+                candidates.RemoveRange(count, candidates.Count - count);
+            }
+
+            this._unlockQueue.Clear();
+            this._unlockQueue.AddRange(candidates);
+            this._unlockIndex = 0;
+            this._unlockMinGap = minGap;
+            this._unlockMaxGap = maxGap;
+            this._unlockRunning = true;
+
+            Log.Write("random unlock start: " + this._unlockQueue.Count + " achievements, gap "
+                + minGap + "-" + maxGap + "s, first delay " + delay + "s");
+
+            this.SendUnlockRun(delay, null, 0);
+            this.Channel.Status("随机解锁已开始：共 " + this._unlockQueue.Count + " 个成就，"
+                + (delay > 0 ? "约 " + delay + " 秒后解锁第一个。" : "正在解锁第一个…"), true);
+
+            this.ScheduleUnlock(delay);
+        }
+
+        private void ScheduleUnlock(int seconds)
+        {
+            this._unlockTimer.Stop();
+            if (seconds < 1) seconds = 1;
+            this._unlockTimer.Interval = seconds * 1000;
+            this._unlockTimer.Start();
+        }
+
+        private void OnUnlockTick(object sender, EventArgs e)
+        {
+            this._unlockTimer.Stop();
+            if (this._unlockRunning == false) return;
+
+            if (this._unlockIndex >= this._unlockQueue.Count)
+            {
+                this.FinishRandomUnlock();
+                return;
+            }
+
+            string id = this._unlockQueue[this._unlockIndex];
+            var api = this._host.Client.SteamUserStats;
+
+            bool ok;
+            try { ok = api.SetAchievement(id, true); }
+            catch (Exception error) { Log.Write("random unlock SetAchievement failed: " + id, error); ok = false; }
+
+            if (ok)
+            {
+                // 每一个都单独保存一次，Steam 才会分别记下当前时间
+                try { api.StoreStats(); }
+                catch (Exception error) { Log.Write("random unlock StoreStats failed: " + id, error); }
+            }
+
+            this._unlockIndex++;
+
+            uint unlockTime = 0;
+            if (ok)
+            {
+                bool achieved = false;
+                try { api.GetAchievementAndUnlockTime(id, out achieved, out unlockTime); }
+                catch (Exception error) { Log.Write("random unlock read back failed: " + id, error); }
+                if (achieved == false) unlockTime = 0;
+            }
+
+            bool finished = this._unlockIndex >= this._unlockQueue.Count;
+            int next = finished ? 0 : this._unlockRandom.Next(this._unlockMinGap, this._unlockMaxGap + 1);
+
+            Log.Write("random unlock " + this._unlockIndex + "/" + this._unlockQueue.Count
+                + " id=" + id + " ok=" + ok + " unlockTime=" + unlockTime + " next=" + next + "s");
+
+            this.SendUnlockRun(next, id, unlockTime);
+
+            if (finished)
+            {
+                this.FinishRandomUnlock();
+                return;
+            }
+
+            this.Channel.Status("随机解锁进行中：" + this._unlockIndex + " / " + this._unlockQueue.Count
+                + "，下一个约 " + next + " 秒后解锁。", true);
+            this.ScheduleUnlock(next);
+        }
+
+        private void SendUnlockRun(int nextSeconds, string achievementId, uint unlockTime)
+        {
+            var b = new JsonBuilder();
+            b.BeginObject()
+                .Name("ev").Str("unlockRun")
+                .Name("active").Bool(true)
+                .Name("done").Num(this._unlockIndex)
+                .Name("total").Num(this._unlockQueue.Count)
+                .Name("next").Num(nextSeconds);
+            if (achievementId != null)
+            {
+                b.Name("id").Str(achievementId);
+                b.Name("unlockTime").Num((long)unlockTime);
+            }
+            b.EndObject();
+            this.Channel.Send(b);
+        }
+
+        private void FinishRandomUnlock()
+        {
+            this._unlockTimer.Stop();
+            bool wasRunning = this._unlockRunning;
+            int done = this._unlockIndex;
+            int total = this._unlockQueue.Count;
+            this._unlockRunning = false;
+            this._unlockQueue.Clear();
+            this._unlockIndex = 0;
+
+            var b = new JsonBuilder();
+            b.BeginObject()
+                .Name("ev").Str("unlockRun")
+                .Name("active").Bool(false)
+                .Name("finished").Bool(true)
+                .Name("done").Num(done)
+                .Name("total").Num(total)
+                .EndObject();
+            this.Channel.Send(b);
+
+            if (wasRunning)
+            {
+                Log.Write("random unlock finished: " + done + " achievements");
+                this.Channel.Toast("success", "随机解锁完成",
+                    "已按随机间隔解锁 " + done + " 个成就，每个成就的解锁时间都不相同。");
+            }
+
+            this.PushGame();
+        }
+
+        private void CancelRandomUnlock(bool notify)
+        {
+            if (this._unlockRunning == false) return;
+
+            this._unlockTimer.Stop();
+            this._unlockRunning = false;
+            int done = this._unlockIndex;
+            int total = this._unlockQueue.Count;
+            this._unlockQueue.Clear();
+            this._unlockIndex = 0;
+
+            var b = new JsonBuilder();
+            b.BeginObject()
+                .Name("ev").Str("unlockRun")
+                .Name("active").Bool(false)
+                .Name("cancelled").Bool(true)
+                .Name("done").Num(done)
+                .Name("total").Num(total)
+                .EndObject();
+            this.Channel.Send(b);
+
+            Log.Write("random unlock cancelled at " + done + "/" + total);
+
+            if (notify)
+            {
+                this.Channel.Toast("info", "已停止随机解锁",
+                    "本次共解锁 " + done + " 个成就，其余成就保持原状。");
+            }
+
+            this.PushGame();
         }
 
         private void Store(Dictionary<string, object> message)
@@ -445,6 +688,8 @@ namespace SAM.Modern
 
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
+            try { this._unlockTimer.Stop(); this._unlockTimer.Dispose(); }
+            catch (Exception) { }
             try { this._pumpTimer.Stop(); this._pumpTimer.Dispose(); }
             catch (Exception) { }
             try { this._host.Dispose(); }

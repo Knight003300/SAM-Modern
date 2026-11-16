@@ -39,6 +39,7 @@
       appId: 0, name: '', capsule: null, capsules: null,
       achievements: [], stats: [],
       summary: { total: 0, unlocked: 0 },
+      unlock: { active: false, done: 0, total: 0, next: 0 },
       loading: false
     },
     ui: { tab: 'achievements', query: '', filter: 'all' },
@@ -223,6 +224,9 @@
       case 'stored':
         onStored(ev);
         break;
+      case 'unlockRun':
+        onUnlockRun(ev);
+        break;
       case 'mock':
         if (!state.mock) enterMock();
         break;
@@ -317,9 +321,13 @@
   }
 
   function onGame(ev) {
+    var previousAppId = state.game.appId;
     state.booted = true;
     state.mode = 'game';
     state.game.appId = num(ev.appId, state.meta.appId);
+    if (previousAppId !== state.game.appId) {
+      state.game.unlock = { active: false, done: 0, total: 0, next: 0 };
+    }
     state.game.name = ev.name ? String(ev.name) : (state.meta.gameName || '未知游戏');
     if (ev.capsule) state.game.capsule = String(ev.capsule);
     else if (!state.game.capsule) state.game.capsule = capsuleForAppId(state.game.appId);
@@ -340,6 +348,63 @@
     state.status.text = '已载入《' + state.game.name + '》：' +
       state.game.achievements.length + ' 个成就、' + state.game.stats.length + ' 项统计';
     render();
+  }
+
+  function onUnlockRun(ev) {
+    if (ev && ev.active) {
+      state.game.unlock = {
+        active: true,
+        done: num(ev.done, 0),
+        total: num(ev.total, 0),
+        next: num(ev.next, 0)
+      };
+      if (ev.id) {
+        var a = findAch(ev.id);
+        if (a) {
+          a.achieved = true;
+          if (typeof ev.unlockTime === 'number' && ev.unlockTime > 0) a.unlockTime = ev.unlockTime;
+          delete state.pending.ach[a.id];
+        }
+      }
+      state.status.text = '随机解锁进行中：' + state.game.unlock.done + ' / ' + state.game.unlock.total +
+        (state.game.unlock.next > 0 ? '，下一个约 ' + state.game.unlock.next + ' 秒后解锁。' : '。');
+      state.status.busy = true;
+      renderGame();
+      renderStatus();
+      return;
+    }
+
+    state.game.unlock = {
+      active: false,
+      done: num(ev && ev.done, 0),
+      total: num(ev && ev.total, 0),
+      next: 0
+    };
+    state.status.busy = false;
+    if (ev && ev.cancelled) {
+      state.status.text = '已停止随机解锁：本次共解锁 ' + state.game.unlock.done + ' 个成就。';
+    } else if (ev && ev.finished) {
+      state.status.text = '随机解锁完成：本次共解锁 ' + state.game.unlock.done + ' 个成就。';
+    }
+    renderGame();
+    renderStatus();
+  }
+
+  function renderUnlockBar() {
+    if (!els.unlockBar) return;
+    var u = state.game.unlock || { active: false, done: 0, total: 0, next: 0 };
+    var show = state.mode === 'game' && u.active;
+    setHidden(els.unlockBar, !show);
+    if (els.btnRandom) els.btnRandom.disabled = !!show;
+    if (!show) return;
+
+    var pct = u.total > 0 ? (u.done / u.total) * 100 : 0;
+    if (els.unlockBarFill) els.unlockBarFill.style.width = Math.max(0, Math.min(100, pct)) + '%';
+    if (els.unlockBarText) {
+      var text = '随机解锁中：' + u.done + ' / ' + u.total + ' 个成就';
+      if (u.next > 0) text += '，下一个约 ' + u.next + ' 秒后';
+      els.unlockBarText.textContent = text;
+    }
   }
 
   function onStored(ev) {
@@ -791,6 +856,7 @@
 
   function renderGame() {
     renderSideCover();
+    renderUnlockBar();
 
     if (state.game.loading) {
       setHidden(els.gameLoading, false);
@@ -1132,6 +1198,206 @@
         toast('info', '已发送重置请求', '主机处理完成后会自动刷新数据。');
       }
     });
+  }
+
+  /* ---------- 随机时间解锁 ---------- */
+
+  var RANDOM_COUNTS = [
+    { value: 0, label: '全部剩余' },
+    { value: 20, label: '20 个' },
+    { value: 50, label: '50 个' },
+    { value: 100, label: '100 个' }
+  ];
+
+  var RANDOM_GAPS = [
+    { label: '快速 · 5–15 秒', min: 5, max: 15 },
+    { label: '标准 · 15–45 秒', min: 15, max: 45 },
+    { label: '缓慢 · 60–180 秒', min: 60, max: 180 }
+  ];
+
+  var mockUnlockTimer = 0;
+
+  function randomCandidates() {
+    var out = [];
+    var list = state.game.achievements;
+    for (var i = 0; i < list.length; i++) {
+      var a = list[i];
+      if (a.protect) continue;
+      if (desiredAch(a)) continue;
+      out.push(a);
+    }
+    return out;
+  }
+
+  function onRandomUnlock() {
+    if (state.game.loading) return;
+    if (state.game.unlock && state.game.unlock.active) {
+      toast('info', '随机解锁正在进行', '请等待这一轮结束，或点进度条上的「停止」。');
+      return;
+    }
+    var pool = randomCandidates();
+    if (pool.length === 0) {
+      toast('info', '没有可解锁的成就', '该游戏所有可修改的成就都已经解锁了。');
+      return;
+    }
+    openRandomModal(pool.length);
+  }
+
+  function openRandomModal(available) {
+    closeModal();
+    var sel = { count: 0, gap: 1 };
+    var el = document.createElement('div');
+    el.className = 'modal';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'true');
+
+    var parts = [];
+    parts.push('<div class="modal__head">');
+    parts.push('<span class="modal__ico modal__ico--info">' + ICON.info + '</span>');
+    parts.push('<h2 class="modal__title">随机时间解锁</h2>');
+    parts.push('</div>');
+    parts.push('<p class="modal__text">Steam 只认“解锁那一刻”的真实时间，不接受伪造的历史时间。' +
+      '所以这里按随机间隔逐个写入，每个成就自然拿到不同的解锁时间。' +
+      '当前有 ' + available + ' 个可解锁成就。解锁期间请保持窗口打开。</p>');
+
+    function groupHtml(key, label, items) {
+      var h = ['<div class="opt-group" data-key="' + key + '">'];
+      h.push('<span class="opt-group__label">' + esc(label) + '</span>');
+      h.push('<div class="opt-row">');
+      for (var i = 0; i < items.length; i++) {
+        h.push('<button type="button" class="opt' + (i === sel[key] ? ' is-active' : '') +
+          '" data-value="' + i + '">' + esc(items[i].label) + '</button>');
+      }
+      h.push('</div></div>');
+      return h.join('');
+    }
+
+    parts.push(groupHtml('count', '解锁数量', RANDOM_COUNTS));
+    parts.push(groupHtml('gap', '解锁间隔', RANDOM_GAPS));
+    parts.push('<div class="modal__foot">');
+    parts.push('<button type="button" class="btn btn--ghost" data-role="cancel">取消</button>');
+    parts.push('<button type="button" class="btn btn--primary" data-role="ok">开始解锁</button>');
+    parts.push('</div>');
+    el.innerHTML = parts.join('');
+
+    var prevFocus = document.activeElement;
+
+    el.addEventListener('click', function (e) {
+      var opt = e.target.closest ? e.target.closest('.opt') : null;
+      if (opt) {
+        var g = opt.closest('.opt-group');
+        if (!g) return;
+        var key = g.getAttribute('data-key');
+        sel[key] = Number(opt.getAttribute('data-value')) || 0;
+        var btns = g.querySelectorAll('.opt');
+        for (var i = 0; i < btns.length; i++) {
+          if (btns[i] === opt) btns[i].classList.add('is-active');
+          else btns[i].classList.remove('is-active');
+        }
+        return;
+      }
+      var hit = e.target.closest ? e.target.closest('[data-role]') : null;
+      var role = hit ? hit.getAttribute('data-role') : '';
+      if (role === 'cancel') {
+        closeModal();
+        return;
+      }
+      if (role === 'ok') {
+        var gap = RANDOM_GAPS[sel.gap] || RANDOM_GAPS[1];
+        var entry = RANDOM_COUNTS[sel.count] || RANDOM_COUNTS[0];
+        startRandomUnlock({ count: entry.value, minGap: gap.min, maxGap: gap.max, delay: 5 });
+      }
+    });
+
+    els.modalRoot.innerHTML = '';
+    els.modalRoot.appendChild(el);
+    setHidden(els.modalRoot, false);
+    modalState = { el: el, prevFocus: prevFocus };
+    window.setTimeout(function () {
+      var ok = el.querySelector('[data-role="ok"]');
+      if (ok && ok.focus) ok.focus();
+    }, 30);
+  }
+
+  function startRandomUnlock(cfg) {
+    closeModal();
+    if (state.mock) {
+      mockRandomUnlock(cfg);
+      return;
+    }
+    state.game.unlock = { active: true, done: 0, total: 0, next: cfg.delay };
+    state.status.text = '随机解锁已开始，正在等待第一个成就…';
+    state.status.busy = true;
+    renderGame();
+    renderStatus();
+    send('game/unlockRandom', {
+      count: cfg.count,
+      minGap: cfg.minGap,
+      maxGap: cfg.maxGap,
+      delay: cfg.delay
+    });
+  }
+
+  function onStopRandomUnlock() {
+    if (!(state.game.unlock && state.game.unlock.active)) return;
+    if (state.mock) {
+      stopMockRandom();
+      return;
+    }
+    send('game/unlockRandom/cancel');
+  }
+
+  function mockRandomUnlock(cfg) {
+    var pool = randomCandidates();
+    if (pool.length === 0) return;
+    if (cfg.count > 0 && cfg.count < pool.length) pool = pool.slice(0, cfg.count);
+    state.game.unlock = { active: true, done: 0, total: pool.length, next: 1 };
+    var i = 0;
+    state.status.text = '随机解锁已开始：共 ' + pool.length + ' 个成就（演示模式）。';
+    state.status.busy = true;
+    renderGame();
+    renderStatus();
+
+    function step() {
+      if (!state.game.unlock || !state.game.unlock.active) return;
+      if (i >= pool.length) {
+        var done = i;
+        state.game.unlock = { active: false, done: done, total: done, next: 0 };
+        state.status.busy = false;
+        state.status.text = '随机解锁完成：本次共解锁 ' + done + ' 个成就。';
+        toast('success', '随机解锁完成', '演示模式下不写入 Steam；真实模式下每个成就都会带上各自的解锁时间。');
+        renderGame();
+        renderStatus();
+        return;
+      }
+      var target = findAch(pool[i].id);
+      if (target) {
+        target.achieved = true;
+        target.unlockTime = Math.floor(Date.now() / 1000);
+      }
+      i++;
+      state.game.unlock.done = i;
+      state.game.unlock.next = 1;
+      state.status.text = '随机解锁进行中：' + i + ' / ' + pool.length + '（演示模式）';
+      state.status.busy = true;
+      renderGame();
+      renderStatus();
+      mockUnlockTimer = window.setTimeout(step, 700);
+    }
+
+    window.clearTimeout(mockUnlockTimer);
+    mockUnlockTimer = window.setTimeout(step, 700);
+  }
+
+  function stopMockRandom() {
+    window.clearTimeout(mockUnlockTimer);
+    var u = state.game.unlock || { done: 0, total: 0 };
+    state.game.unlock = { active: false, done: u.done, total: u.total, next: 0 };
+    state.status.busy = false;
+    state.status.text = '已停止随机解锁：本次共解锁 ' + u.done + ' 个成就。';
+    toast('info', '已停止随机解锁', '本次共解锁 ' + u.done + ' / ' + u.total + ' 个成就（演示模式）。');
+    renderGame();
+    renderStatus();
   }
 
   function onReload() {
@@ -1520,6 +1786,12 @@
     els.ringPct = document.getElementById('ringPct');
     els.btnRefresh = document.getElementById('btnRefresh');
     els.btnReset = document.getElementById('btnReset');
+    els.btnRandom = document.getElementById('btnRandom');
+    els.randomLabel = document.getElementById('randomLabel');
+    els.unlockBar = document.getElementById('unlockBar');
+    els.unlockBarText = document.getElementById('unlockBarText');
+    els.unlockBarFill = document.getElementById('unlockBarFill');
+    els.btnUnlockStop = document.getElementById('btnUnlockStop');
     els.achGrid = document.getElementById('achGrid');
     els.achEmpty = document.getElementById('achEmpty');
     els.achEmptyTitle = document.getElementById('achEmptyTitle');
@@ -1712,6 +1984,8 @@
     if (els.btnSave) els.btnSave.addEventListener('click', onSave);
     if (els.btnRefresh) els.btnRefresh.addEventListener('click', onRefreshGame);
     if (els.btnReset) els.btnReset.addEventListener('click', onReset);
+    if (els.btnRandom) els.btnRandom.addEventListener('click', onRandomUnlock);
+    if (els.btnUnlockStop) els.btnUnlockStop.addEventListener('click', onStopRandomUnlock);
 
     if (els.statBody) {
       els.statBody.addEventListener('input', function (e) {
@@ -1786,6 +2060,11 @@
         if (modalState) {
           e.preventDefault();
           closeModal();
+          return;
+        }
+        if (state.mode === 'game' && state.game.unlock && state.game.unlock.active) {
+          e.preventDefault();
+          onStopRandomUnlock();
           return;
         }
         if (state.mode === 'picker' && state.picker.query) {
