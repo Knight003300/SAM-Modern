@@ -87,8 +87,18 @@ fi
 if [ -n "$upload" ] && [ -f "$ZIP" ]; then
   zip_win="$ZIP"
   command -v cygpath >/dev/null 2>&1 && zip_win="$(cygpath -w "$ZIP")"
-  asset_url=$(printf '%s' "$upload" | sed 's/{?name,label}/?name=SAM-Modern-zhCN.zip/')
-  curl -s -o /tmp/gh_asset.json -w 'upload SAM-Modern-zhCN.zip -> %{http_code}\n' -X POST \
+  asset_name=SAM-Modern-zhCN.zip
+
+  # same-name assets cannot be re-uploaded: drop the old one first
+  old_ids=$(curl -s -H "Authorization: Bearer $TOKEN" "$API/repos/$OWNER/$NAME/releases/tags/$tag" \
+    | ASSET_NAME="$asset_name" node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{const r=JSON.parse(s);const n=process.env.ASSET_NAME;(r.assets||[]).filter(a=>a.name===n).forEach(a=>console.log(a.id))}catch(e){}})")
+  for id in $old_ids; do
+    curl -s -o /dev/null -w "delete old asset $id -> %{http_code}\n" -X DELETE \
+      -H "Authorization: Bearer $TOKEN" "$API/repos/$OWNER/$NAME/releases/assets/$id"
+  done
+
+  asset_url=$(printf '%s' "$upload" | sed "s/{?name,label}/?name=$asset_name/")
+  curl -s -o /tmp/gh_asset.json -w "upload $asset_name -> %{http_code}\n" -X POST \
     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/zip" --data-binary "@$zip_win" "$asset_url"
   grep -o '"name": *"[^"]*\|"size": *[0-9]*' /tmp/gh_asset.json | head -2
 fi
