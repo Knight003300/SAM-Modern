@@ -51,7 +51,7 @@
 
 ## 运行
 
-从 [Releases](../../releases) 下载 `SAM-Modern-zhCN.zip` 解压后双击 `SAM.Modern.exe` 即可（免安装、无依赖安装步骤）。
+从 [Releases](https://github.com/acerlanyize-bit/SAM-Modern/releases) 下载 `SAM-Modern-zhCN.zip` 解压后双击 `SAM.Modern.exe` 即可（免安装、无依赖安装步骤）。
 
 ```
 SAM.Modern.exe            # 打开游戏库
