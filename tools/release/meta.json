@@ -1,0 +1,15 @@
+{
+  "description": "Steam 成就管理器 · 现代化重构版 —— 基于 gibbed/SteamAchievementManager 的二次修改版（WebView2 界面 + 完整汉化）",
+  "topics": [
+    "steam",
+    "steam-achievement-manager",
+    "webview2",
+    "csharp",
+    "chinese",
+    "gametool",
+    "winforms"
+  ],
+  "tag": "v1.0.0",
+  "releaseName": "SAM Modern v1.0.0 · 中文重构版首发",
+  "releaseBody": "首个公开版本。\n\n**下载 `SAM-Modern-zhCN.zip`，解压后双击 `SAM.Modern.exe` 即可运行**（免安装，需已安装并登录 Steam）。\n\n### 这一版做了什么\n- 界面整个重写为 WebView2 + HTML/CSS/JS 的深色玻璃拟态风格，完整中文化\n- 游戏库改为与官方 SAM 一致的全量目录（约 9.4 万个游戏）+ 订阅核对，已购买但未安装的游戏也会列出\n- 封面候选链回落：本地缓存 → Steam CDN → 字母占位\n- 打开游戏不再新开窗口：进程接力实现单窗口切换\n- 成就批量操作改为界面内暂存，Ctrl+S 一次性提交\n- 窗口圆角、进度环、统计页取值范围提示\n\n### 说明\n- 本项目是 [gibbed/SteamAchievementManager](https://github.com/gibbed/SteamAchievementManager) 的二次修改版，保留并直接复用上游 `SAM.API`，界面层全部重写。上游 zlib License。\n- 首次运行可能被 SmartScreen 拦一下（无信誉记录的新程序），点「更多信息 → 仍要运行」。\n- 只修改本地 Steam 用户数据，不上传、不联网写库。"
+}
