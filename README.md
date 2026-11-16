@@ -67,7 +67,7 @@ SAM.Modern.exe 730        # 直接打开某个游戏（appId 就是商店链接�
 > **首次运行可能被 SmartScreen 拦一下**（「Windows 已保护你的电脑 / 发布者未知」）。这是微软对
 > 「没有信誉记录的新程序」的统一提示，不是杀毒报警。点「更多信息 → 仍要运行」即可；
 > 想彻底消掉需要上架 Microsoft Store 或购买代码签名证书并积累下载量，详见
-> [使用说明 · 第七节](build/使用说明.md)。
+> [使用说明 · 第七节](使用说明.md)。
 
 ---
 
@@ -140,4 +140,4 @@ screenshots/            界面截图
 
 - 本仓库：**zlib License**，见 [LICENSE](LICENSE)。
 - 上游：[gibbed/SteamAchievementManager](https://github.com/gibbed/SteamAchievementManager)，Copyright (c) 2024 Rick (rick 'at' gibbed 'dot' us)，zlib License。
-- 界面协议说明见 [docs-BRIDGE.md](docs-BRIDGE.md)，终端用户手册见 [使用说明.md](build/使用说明.md)。
+- 界面协议说明见 [docs-BRIDGE.md](docs-BRIDGE.md)，终端用户手册见 [使用说明.md](使用说明.md)。
