@@ -56,10 +56,15 @@ echo "== 2. push main =="
 cd "$REPO_DIR" || exit 4
 git remote get-url origin >/dev/null 2>&1 || git remote add origin "https://github.com/$OWNER/$NAME.git"
 basic=$(printf 'x-access-token:%s' "$TOKEN" | base64 | tr -d '\n')
-git -c http.extraheader="AUTHORIZATION: Basic $basic" push -u origin main || {
-  echo "FAIL: push rejected -- token lacks Contents:write (fine-grained) or repo scope (classic)."
-  exit 5
-}
+if ! git -c http.extraheader="AUTHORIZATION: Basic $basic" push -u origin main; then
+  # github.com:443 is frequently unreachable behind corporate proxies / TLS-inspecting
+  # firewalls while api.github.com still works, so fall back to the Git Data API.
+  echo "push over https failed, retrying through the Git Data API"
+  GITHUB_OWNER="$OWNER" GITHUB_REPO="$NAME" GITHUB_TOKEN="$TOKEN" node "$REPO_DIR/tools/push-via-api.mjs" || {
+    echo "FAIL: push rejected -- token lacks Contents:write (fine-grained) or repo scope (classic)."
+    exit 5
+  }
+fi
 
 echo "== 3. repo metadata =="
 patch_body=$(node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const m=JSON.parse(s);process.stdout.write(JSON.stringify({description:m.description,topics:m.topics,has_issues:true,has_wiki:false,has_projects:false}))})" < "$META")
