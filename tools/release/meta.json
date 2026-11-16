@@ -1,5 +1,5 @@
 {
-  "description": "Steam 成就管理器 · 现代化重构版 —— 基于 gibbed/SteamAchievementManager 的二次修改版（WebView2 界面 + 完整汉化）",
+  "description": "Steam 成就管理器 · 现代化重构版 —— 基于 gibbed/SteamAchievementManager 的二次修改版（WebView2 界面 + 完整汉化 + 随机时间解锁）",
   "topics": [
     "steam",
     "steam-achievement-manager",
@@ -7,9 +7,10 @@
     "csharp",
     "chinese",
     "gametool",
-    "winforms"
+    "winforms",
+    "achievements"
   ],
-  "tag": "v1.0.0",
-  "releaseName": "SAM Modern v1.0.0 · 中文重构版首发",
-  "releaseBody": "首个公开版本。\n\n**下载 `SAM-Modern-zhCN.zip`，解压后双击 `SAM.Modern.exe` 即可运行**（免安装，需已安装并登录 Steam）。\n\n### 这一版做了什么\n- 界面整个重写为 WebView2 + HTML/CSS/JS 的深色玻璃拟态风格，完整中文化\n- 游戏库改为与官方 SAM 一致的全量目录（约 9.4 万个游戏）+ 订阅核对，已购买但未安装的游戏也会列出\n- 封面候选链回落：本地缓存 → Steam CDN → 字母占位\n- 打开游戏不再新开窗口：进程接力实现单窗口切换\n- 成就批量操作改为界面内暂存，Ctrl+S 一次性提交\n- 窗口圆角、进度环、统计页取值范围提示\n\n### 说明\n- 本项目是 [gibbed/SteamAchievementManager](https://github.com/gibbed/SteamAchievementManager) 的二次修改版，保留并直接复用上游 `SAM.API`，界面层全部重写。上游 zlib License。\n- 首次运行可能被 SmartScreen 拦一下（无信誉记录的新程序），点「更多信息 → 仍要运行」。\n- 只修改本地 Steam 用户数据，不上传、不联网写库。"
+  "tag": "v1.1.0",
+  "releaseName": "SAM Modern v1.1.0 · 随机时间解锁",
+  "releaseBody": "v1.1.0 · 随机时间解锁。Steam 不提供修改成就解锁时间的接口，所以本版改成**按随机间隔逐个真实解锁**——每解锁一个立刻单独提交一次，让 Steam 为每个成就记下各自的真实时刻，从而得到一串自然分散的解锁时间。\n\n**下载 `SAM-Modern-zhCN.zip`，解压后双击 `SAM.Modern.exe` 即可运行**（免安装，需已安装并登录 Steam）。\n\n### v1.1.0 新增\n- **随机时间解锁**：工具栏最左侧的紫色按钮，按随机间隔逐个解锁成就，每个成就由 Steam 记录不同的真实解锁时间\n- 解锁数量按剩余数分档：全部剩余 / 剩余数的 1/4、1/2、3/4（界面直接显示换算后的具体个数）\n- 解锁间隔可选预设（快速 5–15 秒 / 标准 15–45 秒 / 缓慢 60–180 秒），或自定义「天 / 小时 / 分钟 / 秒」四段数值，单个间隔上限 7 天\n- 弹窗实时估算整轮耗时；解锁过程有进度条，状态栏显示下一个成就的倒计时，可随时停止（点「停止」或按 Esc）\n- 工具栏批量按钮改为图标（全选 / 反选 / 锁定全部），给新增入口腾出空间\n\n### v1.0.0 首发内容\n- 界面整个重写为 WebView2 + HTML/CSS/JS 的深色玻璃拟态风格，完整中文化\n- 游戏库改为与官方 SAM 一致的全量目录（约 9.4 万个游戏）+ 订阅核对，已购买但未安装的游戏也会列出\n- 封面候选链回落：本地缓存 → Steam CDN → 字母占位\n- 打开游戏不再新开窗口：进程接力实现单窗口切换\n- 成就批量操作改为界面内暂存，Ctrl+S 一次性提交\n- 窗口圆角、进度环、统计页取值范围提示\n\n### 说明\n- 本项目是 [gibbed/SteamAchievementManager](https://github.com/gibbed/SteamAchievementManager) 的二次修改版，保留并直接复用上游 `SAM.API`，界面层全部重写。上游 zlib License。\n- 随机时间解锁之所以是「逐个真实解锁」而不是「批量回填历史时间」：Steam 公共 API 没有写解锁时间的函数，解锁时间由 Steam 在提交时按当时系统时间记录（参见上游 issue #534）。\n- 首次运行可能被 SmartScreen 拦一下（无信誉记录的新程序），点「更多信息 → 仍要运行」。\n- 只修改本地 Steam 用户数据，不上传、不联网写库。"
 }

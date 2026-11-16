@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 
 const API = 'https://api.github.com';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const OWNER = process.env.GITHUB_OWNER || 'acerlanyize-bit';
+const OWNER = process.env.GITHUB_OWNER || 'Knight003300';
 const REPO = process.env.GITHUB_REPO || 'SAM-Modern';
 const DRY = process.argv.includes('--dry-run');
 

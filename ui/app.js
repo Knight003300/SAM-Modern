@@ -2279,7 +2279,7 @@
   }
 
   window.SAM = {
-    version: '1.0.0',
+    version: '1.1.0',
     handleEvent: handleEvent,
     mock: enterMock,
     getState: function () {

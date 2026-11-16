@@ -8,7 +8,7 @@
 # Fine-grained PAT needs: Contents: rw + Administration: rw
 set -u
 
-OWNER="${GITHUB_OWNER:-acerlanyize-bit}"
+OWNER="${GITHUB_OWNER:-Knight003300}"
 NAME="${GITHUB_REPO:-SAM-Modern}"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ZIP="$REPO_DIR/SAM-Modern-zhCN.zip"
