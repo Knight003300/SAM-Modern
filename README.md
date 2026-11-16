@@ -12,6 +12,8 @@
 
 当前版本 **v1.1.0**，新增「随机时间解锁」——按随机间隔逐个真实解锁成就，让每个成就带上各自不同的解锁时间。
 
+双仓同步发布：[GitHub](https://github.com/Knight003300/SAM-Modern) · [Gitee](https://gitee.com/arasy/SAM-Modern)（国内访问更快）。
+
 ---
 
 ## 截图
@@ -58,7 +60,7 @@
 
 ## 运行
 
-从 [Releases](https://github.com/Knight003300/SAM-Modern/releases) 下载 `SAM-Modern-zhCN.zip` 解压后双击 `SAM.Modern.exe` 即可（免安装、无依赖安装步骤）。
+从 [GitHub Releases](https://github.com/Knight003300/SAM-Modern/releases) 或 [Gitee Releases](https://gitee.com/arasy/SAM-Modern/releases) 下载 `SAM-Modern-zhCN.zip` 解压后双击 `SAM.Modern.exe` 即可（免安装、无依赖安装步骤）。国内网络建议走 Gitee。
 
 ```
 SAM.Modern.exe            # 打开游戏库
