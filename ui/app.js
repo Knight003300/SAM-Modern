@@ -402,7 +402,7 @@
     if (els.unlockBarFill) els.unlockBarFill.style.width = Math.max(0, Math.min(100, pct)) + '%';
     if (els.unlockBarText) {
       var text = '随机解锁中：' + u.done + ' / ' + u.total + ' 个成就';
-      if (u.next > 0) text += '，下一个约 ' + u.next + ' 秒后';
+      if (u.next > 0) text += '，下一个约 ' + fmtGap(u.next) + '后';
       els.unlockBarText.textContent = text;
     }
   }
@@ -1212,8 +1212,45 @@
   var RANDOM_GAPS = [
     { label: '快速 · 5–15 秒', min: 5, max: 15 },
     { label: '标准 · 15–45 秒', min: 15, max: 45 },
-    { label: '缓慢 · 60–180 秒', min: 60, max: 180 }
+    { label: '缓慢 · 60–180 秒', min: 60, max: 180 },
+    { label: '自定义', custom: true }
   ];
+
+  // 自定义间隔的单位：天 / 小时 / 秒
+  var GAP_UNITS = [
+    { unit: 86400, label: '天' },
+    { unit: 3600, label: '小时' },
+    { unit: 1, label: '秒' }
+  ];
+
+  var GAP_MAX_SECONDS = 7 * 86400;
+
+  function unitOptions(defaultUnit) {
+    var out = [];
+    for (var i = 0; i < GAP_UNITS.length; i++) {
+      out.push('<option value="' + GAP_UNITS[i].unit + '"' +
+        (GAP_UNITS[i].unit === defaultUnit ? ' selected' : '') + '>' + GAP_UNITS[i].label + '</option>');
+    }
+    return out.join('');
+  }
+
+  function fmtGap(seconds) {
+    var s = Math.max(0, Math.round(seconds || 0));
+    if (s < 60) return s + ' 秒';
+    if (s < 3600) {
+      var m = Math.floor(s / 60);
+      var rs = s % 60;
+      return rs > 0 ? m + ' 分 ' + rs + ' 秒' : m + ' 分钟';
+    }
+    if (s < 86400) {
+      var h = Math.floor(s / 3600);
+      var rm = Math.floor((s % 3600) / 60);
+      return rm > 0 ? h + ' 小时 ' + rm + ' 分' : h + ' 小时';
+    }
+    var d = Math.floor(s / 86400);
+    var rh = Math.floor((s % 86400) / 3600);
+    return rh > 0 ? d + ' 天 ' + rh + ' 小时' : d + ' 天';
+  }
 
   var mockUnlockTimer = 0;
 
@@ -1274,6 +1311,22 @@
 
     parts.push(groupHtml('count', '解锁数量', RANDOM_COUNTS));
     parts.push(groupHtml('gap', '解锁间隔', RANDOM_GAPS));
+
+    // 自定义间隔：最小与最大各一个数字 + 单位（天 / 小时 / 秒）
+    parts.push('<div class="gap-custom" data-role="customGap" hidden>');
+    parts.push('<div class="gap-custom__row">');
+    parts.push('<span class="gap-custom__cap">最短</span>');
+    parts.push('<input class="gap-custom__num" type="number" min="1" max="9999" step="1" value="30" data-role="gapMin" aria-label="最短间隔" />');
+    parts.push('<select class="gap-custom__unit" data-role="gapMinUnit" aria-label="最短间隔单位">' + unitOptions(1) + '</select>');
+    parts.push('</div>');
+    parts.push('<div class="gap-custom__row">');
+    parts.push('<span class="gap-custom__cap">最长</span>');
+    parts.push('<input class="gap-custom__num" type="number" min="1" max="9999" step="1" value="90" data-role="gapMax" aria-label="最长间隔" />');
+    parts.push('<select class="gap-custom__unit" data-role="gapMaxUnit" aria-label="最长间隔单位">' + unitOptions(1) + '</select>');
+    parts.push('</div>');
+    parts.push('<p class="gap-custom__hint" data-role="gapHint">每个成就之间随机等 30 – 90 秒，合计最少约 30 秒。</p>');
+    parts.push('</div>');
+
     parts.push('<div class="modal__foot">');
     parts.push('<button type="button" class="btn btn--ghost" data-role="cancel">取消</button>');
     parts.push('<button type="button" class="btn btn--primary" data-role="ok">开始解锁</button>');
@@ -1281,6 +1334,45 @@
     el.innerHTML = parts.join('');
 
     var prevFocus = document.activeElement;
+
+    var customBox = el.querySelector('[data-role="customGap"]');
+    var numMin = el.querySelector('[data-role="gapMin"]');
+    var numMax = el.querySelector('[data-role="gapMax"]');
+    var unitMin = el.querySelector('[data-role="gapMinUnit"]');
+    var unitMax = el.querySelector('[data-role="gapMaxUnit"]');
+    var gapHint = el.querySelector('[data-role="gapHint"]');
+
+    function syncCustom() {
+      if (!customBox) return;
+      var isCustom = !!(RANDOM_GAPS[sel.gap] && RANDOM_GAPS[sel.gap].custom);
+      setHidden(customBox, !isCustom);
+      if (!isCustom) return;
+      var lo = readCustom();
+      if (gapHint) {
+        var picked = RANDOM_COUNTS[sel.count] || RANDOM_COUNTS[0];
+        var n = picked.value > 0 ? Math.min(picked.value, available) : available;
+        gapHint.textContent = '每个成就之间随机等 ' + fmtGap(lo.minGap) + ' – ' + fmtGap(lo.maxGap) +
+          '；共 ' + n + ' 个成就，整轮大约需要 ' + fmtGap(n * lo.gapMid) + '。';
+      }
+    }
+
+    function readCustom() {
+      var a = Math.max(1, Math.min(9999, Number(numMin && numMin.value) || 1));
+      var b = Math.max(1, Math.min(9999, Number(numMax && numMax.value) || 1));
+      var ua = Number(unitMin && unitMin.value) || 1;
+      var ub = Number(unitMax && unitMax.value) || 1;
+      var lo = a * ua;
+      var hi = b * ub;
+      if (hi < lo) { var t = lo; lo = hi; hi = t; }
+      lo = Math.max(1, Math.min(GAP_MAX_SECONDS, Math.round(lo)));
+      hi = Math.max(lo, Math.min(GAP_MAX_SECONDS, Math.round(hi)));
+      return { minGap: lo, maxGap: hi, gapMid: Math.round((lo + hi) / 2) };
+    }
+
+    if (customBox) {
+      customBox.addEventListener('input', syncCustom);
+      customBox.addEventListener('change', syncCustom);
+    }
 
     el.addEventListener('click', function (e) {
       var opt = e.target.closest ? e.target.closest('.opt') : null;
@@ -1294,6 +1386,7 @@
           if (btns[i] === opt) btns[i].classList.add('is-active');
           else btns[i].classList.remove('is-active');
         }
+        if (key === 'gap' || key === 'count') syncCustom();
         return;
       }
       var hit = e.target.closest ? e.target.closest('[data-role]') : null;
@@ -1305,7 +1398,9 @@
       if (role === 'ok') {
         var gap = RANDOM_GAPS[sel.gap] || RANDOM_GAPS[1];
         var entry = RANDOM_COUNTS[sel.count] || RANDOM_COUNTS[0];
-        startRandomUnlock({ count: entry.value, minGap: gap.min, maxGap: gap.max, delay: 5 });
+        var lo = gap.custom ? readCustom().minGap : gap.min;
+        var hi = gap.custom ? readCustom().maxGap : gap.max;
+        startRandomUnlock({ count: entry.value, minGap: lo, maxGap: hi, delay: Math.min(5, lo) });
       }
     });
 

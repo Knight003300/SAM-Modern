@@ -33,6 +33,8 @@ namespace SAM.Modern
         private int _unlockMaxGap = 45;
         private bool _unlockRunning;
 
+        private const int MaxUnlockGap = 7 * 24 * 60 * 60;
+
         public GameForm(SteamHost host, long appId)
             : base("SAM Modern  ·  成就管理")
         {
@@ -340,10 +342,11 @@ namespace SAM.Modern
             int maxGap = (int)Math.Round(JsonParser.GetNumber(message, "maxGap", 45));
             int delay = (int)Math.Round(JsonParser.GetNumber(message, "delay", 5));
 
+            // 自定义间隔可以按「天」描述，所以上限放宽到 7 天
             if (minGap < 1) minGap = 1;
-            if (minGap > 3600) minGap = 3600;
+            if (minGap > MaxUnlockGap) minGap = MaxUnlockGap;
             if (maxGap < minGap) maxGap = minGap;
-            if (maxGap > 3600) maxGap = 3600;
+            if (maxGap > MaxUnlockGap) maxGap = MaxUnlockGap;
             if (delay < 0) delay = 0;
             if (delay > 3600) delay = 3600;
 
@@ -389,10 +392,31 @@ namespace SAM.Modern
                 + minGap + "-" + maxGap + "s, first delay " + delay + "s");
 
             this.SendUnlockRun(delay, null, 0);
-            this.Channel.Status("随机解锁已开始：共 " + this._unlockQueue.Count + " 个成就，"
-                + (delay > 0 ? "约 " + delay + " 秒后解锁第一个。" : "正在解锁第一个…"), true);
+            this.Channel.Status("随机解锁已开始：共 " + this._unlockQueue.Count + " 个成就，间隔 "
+                + FormatGap(minGap) + " – " + FormatGap(maxGap) + "，"
+                + (delay > 0 ? "约 " + FormatGap(delay) + "后解锁第一个。" : "正在解锁第一个…"), true);
 
             this.ScheduleUnlock(delay);
+        }
+
+        private static string FormatGap(int seconds)
+        {
+            if (seconds < 60) return seconds + " 秒";
+            if (seconds < 3600)
+            {
+                int m = seconds / 60;
+                int rs = seconds % 60;
+                return rs > 0 ? m + " 分 " + rs + " 秒" : m + " 分钟";
+            }
+            if (seconds < 86400)
+            {
+                int h = seconds / 3600;
+                int rm = (seconds % 3600) / 60;
+                return rm > 0 ? h + " 小时 " + rm + " 分" : h + " 小时";
+            }
+            int d = seconds / 86400;
+            int rh = (seconds % 86400) / 3600;
+            return rh > 0 ? d + " 天 " + rh + " 小时" : d + " 天";
         }
 
         private void ScheduleUnlock(int seconds)
@@ -454,7 +478,7 @@ namespace SAM.Modern
             }
 
             this.Channel.Status("随机解锁进行中：" + this._unlockIndex + " / " + this._unlockQueue.Count
-                + "，下一个约 " + next + " 秒后解锁。", true);
+                + "，下一个约 " + FormatGap(next) + "后解锁。", true);
             this.ScheduleUnlock(next);
         }
 

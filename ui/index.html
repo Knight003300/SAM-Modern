@@ -92,6 +92,13 @@
         </svg>
         <span>游戏库</span>
       </button>
+      <button type="button" class="btn btn--accent" id="btnRandom" title="按随机间隔逐个解锁成就，每个成就得到不同的解锁时间">
+        <svg class="btn__ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M3.8 6.4h3.4l5.6 7.2h3.4" /><path d="M13.6 3.6 16.4 6.4l-2.8 2.8" />
+          <path d="M3.8 13.6h3.4l1.5-1.9" /><path d="M13.6 10.8l2.8 2.8-2.8 2.8" />
+        </svg>
+        <span class="btn__label" id="randomLabel">随机时间解锁</span>
+      </button>
       <span class="toolbar__divider" aria-hidden="true"></span>
 
       <div class="seg seg--tabs" id="gameTabs" role="tablist" aria-label="数据类别">
@@ -118,9 +125,22 @@
       <div class="toolbar__spacer"></div>
 
       <div class="toolbar__actions" id="achActions">
-        <button type="button" class="btn btn--ghost btn--sm" data-act="unlockAll" title="把全部成就标记为解锁（本地暂存，需保存）">全选</button>
-        <button type="button" class="btn btn--ghost btn--sm" data-act="invertAll" title="翻转全部成就的解锁状态（本地暂存，需保存）">反选</button>
-        <button type="button" class="btn btn--ghost btn--sm" data-act="lockAll" title="把全部成就标记为未解锁（本地暂存，需保存）">锁定全部</button>
+        <button type="button" class="btn btn--ghost btn--icon" data-act="unlockAll" title="全部标记为解锁（本地暂存，需保存）" aria-label="全部标记为解锁">
+          <svg class="btn__ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M3.4 10.6 6.6 13.6 12.4 6.6" /><path d="M9.6 12.2 12.2 14.6 18 6.6" />
+          </svg>
+        </button>
+        <button type="button" class="btn btn--ghost btn--icon" data-act="invertAll" title="翻转全部成就的解锁状态（本地暂存，需保存）" aria-label="翻转全部成就的解锁状态">
+          <svg class="btn__ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4.2 6.6h9.6" /><path d="M11.2 3.8 14 6.6l-2.8 2.8" />
+            <path d="M15.8 13.4H6.2" /><path d="M8.8 10.6 6 13.4l2.8 2.8" />
+          </svg>
+        </button>
+        <button type="button" class="btn btn--ghost btn--icon" data-act="lockAll" title="全部标记为未解锁（本地暂存，需保存）" aria-label="全部标记为未解锁">
+          <svg class="btn__ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="4.6" y="9" width="10.8" height="7.4" rx="2" /><path d="M7.2 9V6.6a2.8 2.8 0 0 1 5.6 0V9" />
+          </svg>
+        </button>
       </div>
 
       <button type="button" class="btn btn--primary" id="btnSave" disabled>
@@ -179,13 +199,6 @@
         <dl class="side__facts" id="sideFacts"></dl>
 
         <div class="side__actions">
-          <button type="button" class="btn btn--ghost btn--block" id="btnRandom">
-            <svg class="btn__ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M3.8 6.4h3.4l5.6 7.2h3.4" /><path d="M13.6 3.6 16.4 6.4l-2.8 2.8" />
-              <path d="M3.8 13.6h3.4l1.5-1.9" /><path d="M13.6 10.8l2.8 2.8-2.8 2.8" />
-            </svg>
-            <span id="randomLabel">随机时间解锁</span>
-          </button>
           <button type="button" class="btn btn--ghost btn--block" id="btnRefresh">
             <svg class="btn__ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M16.2 8.6A6.4 6.4 0 1 0 16 12" /><path d="M16.6 4.6v4.2h-4.2" />
