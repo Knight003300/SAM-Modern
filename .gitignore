@@ -1,0 +1,33 @@
+# ---- build outputs ----
+build/
+dist/
+relay/
+cache/
+*.log
+debug.log
+
+# ---- offline toolchain (downloaded by tools/fetch-ext.mjs) ----
+tools/ext/
+
+# ---- one-off diagnostics ----
+tools/_scratch/
+tools/build-test/
+
+# ---- local release artifact (published as a GitHub Release instead) ----
+SAM-Modern-zhCN.zip
+
+# ---- upstream source archive (the extracted tree is tracked) ----
+vendor/sam.zip
+
+# ---- code-signing private material ----
+*.pfx
+*.p12
+*.snk
+
+# ---- OS / editor noise ----
+Thumbs.db
+desktop.ini
+.DS_Store
+.vs/
+.idea/
+*.user

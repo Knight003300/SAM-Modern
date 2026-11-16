@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<title>Steam 成就管理器 · SAM</title>
+<link rel="stylesheet" href="app.css" />
+</head>
+<body data-mode="picker">
+
+<div class="bg" aria-hidden="true">
+  <span class="bg__blob bg__blob--1"></span>
+  <span class="bg__blob bg__blob--2"></span>
+  <span class="bg__grid"></span>
+</div>
+
+<div class="app" id="app">
+
+  <header class="titlebar" id="titlebar">
+    <div class="titlebar__brand">
+      <span class="brand__mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M7.2 3.8h9.6v4.4a4.8 4.8 0 0 1-9.6 0V3.8Z" />
+          <path d="M7.2 4.8H4.9a2.6 2.6 0 0 0 2.3 4.4" />
+          <path d="M16.8 4.8h2.3a2.6 2.6 0 0 1-2.3 4.4" />
+          <path d="M12 13v2.9" />
+          <path d="M8.7 20.2h6.6l-.85-2.7H9.55l-.85 2.7Z" />
+        </svg>
+      </span>
+      <span class="brand__text">
+        <span class="brand__title">Steam 成就管理器 · SAM</span>
+        <span class="brand__sub" id="brandSub">成就与统计编辑工具</span>
+      </span>
+    </div>
+
+    <div class="titlebar__meta">
+      <span class="chip chip--mock" id="mockChip" hidden>
+        <span class="chip__dot"></span>演示数据
+      </span>
+      <span class="chip" id="userChip" hidden></span>
+    </div>
+
+    <div class="winbtns">
+      <button type="button" class="winbtn" id="btnMin" title="最小化" aria-label="最小化">
+        <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M2.2 5h5.6" /></svg>
+      </button>
+      <button type="button" class="winbtn" id="btnMax" title="最大化" aria-label="最大化">
+        <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><rect x="2.4" y="2.4" width="5.2" height="5.2" rx="1.1" /></svg>
+      </button>
+      <button type="button" class="winbtn winbtn--close" id="btnClose" title="关闭" aria-label="关闭">
+        <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2.7 2.7 7.3 7.3M7.3 2.7 2.7 7.3" /></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="toolbar">
+
+    <div class="toolbar__row" id="tbPicker">
+      <label class="search">
+        <svg class="search__icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+          <circle cx="8.8" cy="8.8" r="5.4" /><path d="M12.9 12.9 16.6 16.6" />
+        </svg>
+        <input class="search__input" id="pickerSearch" type="text" placeholder="搜索游戏名称…" autocomplete="off" spellcheck="false" aria-label="搜索游戏名称" />
+        <button type="button" class="search__clear" id="pickerSearchClear" aria-label="清空搜索" hidden>
+          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M3.2 3.2 8.8 8.8M8.8 3.2 3.2 8.8" /></svg>
+        </button>
+      </label>
+
+      <div class="seg" id="pickerTypeSeg" role="group" aria-label="游戏类型筛选">
+        <button type="button" class="seg__item is-active" data-type="all">全部</button>
+        <button type="button" class="seg__item" data-type="normal">正式版</button>
+        <button type="button" class="seg__item" data-type="demo">试玩</button>
+        <button type="button" class="seg__item" data-type="mod">模组</button>
+        <button type="button" class="seg__item" data-type="junk">其他</button>
+      </div>
+
+      <div class="toolbar__spacer"></div>
+
+      <button type="button" class="btn btn--ghost" id="btnReload">
+        <svg class="btn__ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M16.2 8.6A6.4 6.4 0 1 0 16 12" /><path d="M16.6 4.6v4.2h-4.2" />
+        </svg>
+        <span>重新扫描</span>
+      </button>
+    </div>
+
+    <div class="toolbar__row" id="tbGame" hidden>
+      <button type="button" class="btn btn--back" id="btnBack" title="返回游戏库（Esc 也可返回）">
+        <svg class="btn__ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M15.4 10H4.8" /><path d="M9.2 5.2 4.4 10l4.8 4.8" />
+        </svg>
+        <span>游戏库</span>
+      </button>
+      <span class="toolbar__divider" aria-hidden="true"></span>
+
+      <div class="seg seg--tabs" id="gameTabs" role="tablist" aria-label="数据类别">
+        <button type="button" class="seg__item is-active" data-tab="achievements" role="tab" aria-selected="true">成就</button>
+        <button type="button" class="seg__item" data-tab="stats" role="tab" aria-selected="false">统计</button>
+      </div>
+
+      <label class="search" id="achSearchWrap">
+        <svg class="search__icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+          <circle cx="8.8" cy="8.8" r="5.4" /><path d="M12.9 12.9 16.6 16.6" />
+        </svg>
+        <input class="search__input" id="achSearch" type="text" placeholder="搜索成就…" autocomplete="off" spellcheck="false" aria-label="搜索成就" />
+        <button type="button" class="search__clear" id="achSearchClear" aria-label="清空搜索" hidden>
+          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M3.2 3.2 8.8 8.8M8.8 3.2 3.2 8.8" /></svg>
+        </button>
+      </label>
+
+      <div class="seg" id="achFilterSeg" role="group" aria-label="成就状态筛选">
+        <button type="button" class="seg__item is-active" data-filter="all">全部</button>
+        <button type="button" class="seg__item" data-filter="unlocked">已解锁</button>
+        <button type="button" class="seg__item" data-filter="locked">未解锁</button>
+      </div>
+
+      <div class="toolbar__spacer"></div>
+
+      <div class="toolbar__actions" id="achActions">
+        <button type="button" class="btn btn--ghost btn--sm" data-act="unlockAll" title="把全部成就标记为解锁（本地暂存，需保存）">全选</button>
+        <button type="button" class="btn btn--ghost btn--sm" data-act="invertAll" title="翻转全部成就的解锁状态（本地暂存，需保存）">反选</button>
+        <button type="button" class="btn btn--ghost btn--sm" data-act="lockAll" title="把全部成就标记为未解锁（本地暂存，需保存）">锁定全部</button>
+      </div>
+
+      <button type="button" class="btn btn--primary" id="btnSave" disabled>
+        <span class="spinner" id="saveSpinner" hidden></span>
+        <span class="btn__label" id="saveLabel">保存改动</span>
+        <span class="badge" id="saveBadge" hidden>0</span>
+      </button>
+    </div>
+
+  </div>
+
+  <main class="stage">
+
+    <section class="view view--picker" id="viewPicker" aria-label="游戏选择">
+      <div class="game-grid" id="gameGrid"></div>
+
+      <div class="skel-grid" id="pickerSkeleton" aria-hidden="true"></div>
+
+      <div class="empty" id="pickerEmpty" hidden>
+        <svg class="empty__art" viewBox="0 0 160 120" fill="none" aria-hidden="true">
+          <rect x="18" y="26" width="58" height="66" rx="10" stroke="rgba(124,92,255,.55)" stroke-width="1.5" />
+          <rect x="84" y="38" width="58" height="54" rx="10" stroke="rgba(74,168,255,.5)" stroke-width="1.5" />
+          <path d="M38 44h18M38 54h26M38 64h12" stroke="rgba(255,255,255,.28)" stroke-width="1.5" stroke-linecap="round" />
+          <path d="M100 56h26M100 66h16" stroke="rgba(255,255,255,.22)" stroke-width="1.5" stroke-linecap="round" />
+          <circle cx="128" cy="30" r="12" stroke="rgba(53,208,127,.55)" stroke-width="1.5" />
+          <path d="M123 30.5 126.6 34l5.6-6" stroke="rgba(53,208,127,.8)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <p class="empty__title" id="pickerEmptyTitle">还没有可管理的游戏</p>
+        <p class="empty__text" id="pickerEmptyText">未在 Steam 库中找到任何游戏，试试重新扫描。</p>
+      </div>
+    </section>
+
+    <section class="view view--game" id="viewGame" aria-label="成就管理" hidden>
+      <aside class="side" id="gameSide">
+        <div class="side__cover" id="sideCover"></div>
+        <h1 class="side__title" id="sideTitle">—</h1>
+        <div class="side__meta" id="sideMeta"></div>
+
+        <div class="ring-wrap">
+          <svg class="ring" viewBox="0 0 120 120" aria-hidden="true">
+            <defs>
+              <linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stop-color="#7c5cff" />
+                <stop offset="100%" stop-color="#4aa8ff" />
+              </linearGradient>
+            </defs>
+            <circle class="ring__track" cx="60" cy="60" r="52" />
+            <circle class="ring__fill" id="ringFill" cx="60" cy="60" r="52" transform="rotate(-90 60 60)" />
+          </svg>
+          <div class="ring__center">
+            <div class="ring__num"><span id="ringUnlocked">0</span><span class="ring__slash">/</span><span id="ringTotal">0</span></div>
+            <div class="ring__pct" id="ringPct">0%</div>
+          </div>
+        </div>
+
+        <dl class="side__facts" id="sideFacts"></dl>
+
+        <div class="side__actions">
+          <button type="button" class="btn btn--ghost btn--block" id="btnRefresh">
+            <svg class="btn__ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M16.2 8.6A6.4 6.4 0 1 0 16 12" /><path d="M16.6 4.6v4.2h-4.2" />
+            </svg>
+            <span>刷新数据</span>
+          </button>
+          <button type="button" class="btn btn--danger btn--block" id="btnReset">
+            <svg class="btn__ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4.4 6.2h11.2M8.2 6.2V4.5h3.6v1.7M6 6.2l.7 9.3h6.6l.7-9.3" />
+            </svg>
+            <span>重置统计</span>
+          </button>
+        </div>
+      </aside>
+
+      <div class="panel">
+        <div class="panel__body" id="panelBody">
+
+          <div class="ach-grid" id="achGrid"></div>
+
+          <div class="empty empty--tight" id="achEmpty" hidden>
+            <svg class="empty__art empty__art--sm" viewBox="0 0 120 96" fill="none" aria-hidden="true">
+              <circle cx="52" cy="44" r="22" stroke="rgba(124,92,255,.5)" stroke-width="1.6" />
+              <path d="M68 60.5 84 76" stroke="rgba(74,168,255,.55)" stroke-width="2.4" stroke-linecap="round" />
+              <path d="M42 44h20M42 51h12" stroke="rgba(255,255,255,.2)" stroke-width="1.5" stroke-linecap="round" />
+            </svg>
+            <p class="empty__title" id="achEmptyTitle">没有匹配的成就</p>
+            <p class="empty__text" id="achEmptyText">换个关键词或切换筛选条件试试。</p>
+          </div>
+
+          <div class="stat-wrap" id="statWrap" hidden>
+            <table class="stat-table">
+              <thead>
+                <tr>
+                  <th class="c-name">统计项目</th>
+                  <th class="c-val">当前值</th>
+                  <th class="c-range">取值范围</th>
+                  <th class="c-flag">属性</th>
+                </tr>
+              </thead>
+              <tbody id="statBody"></tbody>
+            </table>
+            <p class="stat-hint">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">
+                <circle cx="8" cy="8" r="6" /><path d="M8 7.2v3.6M8 5.1v.1" />
+              </svg>
+              <span>直接修改数值即可，受保护的统计项不可编辑；改动会在点击「保存改动」后写入。</span>
+            </p>
+          </div>
+
+          <div class="empty" id="gameLoading" hidden>
+            <span class="spinner spinner--lg"></span>
+            <p class="empty__title">正在读取游戏数据…</p>
+            <p class="empty__text">请稍候，正在从 Steam 拉取成就与统计。</p>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="statusbar">
+    <div class="statusbar__left">
+      <span class="spinner spinner--sm" id="statusSpinner" hidden></span>
+      <span class="statusbar__text" id="statusText">正在初始化…</span>
+    </div>
+    <div class="statusbar__right" id="statusMeta"></div>
+  </footer>
+
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
+<div class="modal-root" id="modalRoot" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>
