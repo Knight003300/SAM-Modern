@@ -35,7 +35,7 @@
 | 区域 | 说明 |
 | --- | --- |
 | 游戏库 | 与官方 SAM 一致：拉取 Steam 全量游戏目录（`games.xml`，约 9.4 万条）+ 逐项向 Steam 核对「是否已拥有」，因此**已购买但从未安装的游戏也会列出**；本机已安装但目录未收录的再用 `appmanifest` 补齐。卡片显示封面与类型标签，支持搜索与「正式版 / 试玩 / 模组 / 其他」筛选 |
-| 封面 | 候选链回落：本地 `appcache\\librarycache`（header → capsule → hero → 600x900）→ Steam CDN → 字母占位。个别新游戏只有 `library_hero.jpg`，也能显示 |
+| 封面 | 候选链回落：本地 `appcache\librarycache`（header → capsule → hero → 600x900）→ Steam CDN → 字母占位。个别新游戏只有 `library_hero.jpg`，也能显示 |
 | 成就页 | 卡片网格展示全部成就（名称、描述、隐藏标记、解锁时间），单卡勾选切换状态 |
 | 批量操作 | 全选 / 反选 / 锁定全部 —— 只在界面内暂存，按「保存改动」或 `Ctrl+S` 才写入 Steam |
 | 统计页 | 可编辑数值表格，显示取值范围（`≥ 0`、`不限`）与「只增 / 受保护」标记 |
@@ -62,7 +62,7 @@ SAM.Modern.exe 730        # 直接打开某个游戏（appId 就是商店链接�
 
 1. 已安装 Steam 且已登录；
 2. 已安装 **Microsoft Edge WebView2 运行时**（Win10/11 通常自带）；
-3. 至少运行过一次要管理的游戏（Steam 才会生成 `appcache\\stats\\UserGameStatsSchema_<appid>.bin`）。
+3. 至少运行过一次要管理的游戏（Steam 才会生成 `appcache\stats\UserGameStatsSchema_<appid>.bin`）。
 
 > **首次运行可能被 SmartScreen 拦一下**（「Windows 已保护你的电脑 / 发布者未知」）。这是微软对
 > 「没有信誉记录的新程序」的统一提示，不是杀毒报警。点「更多信息 → 仍要运行」即可；
