@@ -21,7 +21,9 @@ META="$REPO_DIR/tools/release/meta.json"
 
 TOKEN="${GITHUB_TOKEN:-}"
 if [ -z "$TOKEN" ] && [ -f "$HOME/.dsh/storages/mcp_connector.json" ]; then
-  TOKEN="$(grep -o 'github_pat_[A-Za-z0-9_]*' "$HOME/.dsh/storages/mcp_connector.json" | head -1)"
+  CFG="$HOME/.dsh/storages/mcp_connector.json"
+  TOKEN="$(grep -o 'github_pat_[A-Za-z0-9_]*' "$CFG" | head -1)"
+  [ -z "$TOKEN" ] && TOKEN="$(grep -o 'ghp_[A-Za-z0-9]\{20,\}' "$CFG" | head -1)"
   [ -n "$TOKEN" ] && echo "note: using the PAT stored by the DSH GitHub connector"
 fi
 [ -z "$TOKEN" ] && { echo "FAIL: set GITHUB_TOKEN"; exit 2; }
@@ -32,8 +34,17 @@ echo "== 1. repo check =="
 code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "https://api.github.com/repos/$OWNER/$NAME")
 echo "GET /repos/$OWNER/$NAME -> $code"
 if [ "$code" = "404" ]; then
-  echo "FAIL: repo does not exist. Create an EMPTY repo at https://github.com/new (name=$NAME) and re-run."
-  exit 3
+  echo "repo missing, creating..."
+  desc=$(node -e "process.stdout.write(require('$META').description)")
+  create_body=$(node -e "process.stdout.write(JSON.stringify({name:process.argv[1],description:process.argv[2],private:false,auto_init:false,has_issues:true,has_wiki:false,has_projects:false},null,0))" "$NAME" "$desc")
+  ccode=$(curl -s -o /tmp/gh_create.json -w '%{http_code}' -X POST     -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" -d "$create_body"     "https://api.github.com/user/repos")
+  echo "POST /user/repos -> $ccode"
+  if [ "$ccode" != "201" ]; then
+    head -c 400 /tmp/gh_create.json; echo
+    echo "FAIL: cannot create repository (token needs classic 'repo' scope or administration:write)."
+    exit 3
+  fi
+  echo "repo created: $OWNER/$NAME"
 fi
 
 echo "== 2. push main =="
