@@ -64,12 +64,10 @@ if [ -z "$upload" ]; then
 else
   echo "release created: $tag"
   [ -f "$ZIP" ] || { echo "WARN: $ZIP not found, skipping asset upload"; exit 0; }
+  asset_url=$(printf '%s' "$upload" | sed 's/{?name,label}/?name=SAM-Modern-zhCN.zip/')
   curl -s -o /dev/null -w 'upload SAM-Modern-zhCN.zip -> %{http_code}\n' -X POST \
     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/zip" \
-    --data-binary "@$ZIP" "${upload%\{*}${upload#*\{}" --upload-file "$ZIP" 2>/dev/null || true
-  curl -s -o /dev/null -w 'upload (retry) -> %{http_code}\n' -X POST \
-    -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/zip" \
-    --data-binary "@$ZIP" "$(printf '%s' "$upload" | sed 's/{?name,label}/?name=SAM-Modern-zhCN.zip/')"
+    --data-binary "@$ZIP" "$asset_url"
 fi
 
 echo "== done: https://github.com/$OWNER/$NAME =="
