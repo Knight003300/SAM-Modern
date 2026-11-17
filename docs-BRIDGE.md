@@ -31,7 +31,8 @@ window.chrome.webview.addEventListener('message', e => handle(e.data));
 
 ### Game（成就管理界面）
 - `{ ev:"game", appId, name, achievements:[...], stats:[...], summary:{ total:number, unlocked:number } }`
-  achievement: `{ id, name, desc, icon:string|null, iconLocked:string|null, achieved:boolean, unlockTime:number|null(Unix秒), hidden:boolean, protect:boolean }`
+  achievement: `{ id, name, desc, icon:string|null, iconLocked:string|null, achieved:boolean, unlockTime:number|null(Unix秒), hidden:boolean, protect:boolean, rarity:number }`
+  `rarity` 是全服解锁率百分比（0–100），读不到时为 `-1`（UI 视为未知，不判稀有）。
   stat: `{ id, name, value:number, isFloat:boolean, min:number, max:number, incrementOnly:boolean, protect:boolean }`
   `protect=true` 表示受保护（permission&3!=0 或 permission&2!=0），UI 必须禁用编辑。
 - `{ ev:"stored", achievements:number, stats:number }` 保存成功（C# 随后会再发一次 game 事件刷新）。
@@ -52,8 +53,9 @@ Game：
 - `{cmd:"game/store", achievements:{[id]:boolean}, stats:{[id]:number}}`  保存改动（只含被修改项）
 - `{cmd:"game/reset", resetAchievements:boolean}`  重置所有统计（危险操作，UI 需二次确认）
 - `{cmd:"game/unlockAll"}` / `{cmd:"game/lockAll"}` / `{cmd:"game/invertAll"}`  批量勾选（由 C# 返回新的 game 事件）
-- `{cmd:"game/unlockRandom", count:number, minGap:number, maxGap:number, delay:number}`
+- `{cmd:"game/unlockRandom", count:number, minGap:number, maxGap:number, delay:number, rareOnly?:boolean, rarePct?:number}`
   按随机间隔逐个真实解锁：`count=0` 表示全部剩余，`minGap/maxGap` 是间隔秒数区间，`delay` 是第一个成就前的等待秒数。
+  `rareOnly=true` 时只挑全服解锁率低于 `rarePct`（默认 5，上限 100）的成就；候选不足会走「没有可解锁的稀有成就」提示。
   每解锁一个都会立刻 `StoreStats()`，Steam 因此为每个成就记下各自的真实时间。进度通过 `unlockRun` 事件推送。
 - `{cmd:"game/unlockRandom/cancel"}`  中止进行中的随机解锁（已解锁的不回滚）
 
@@ -65,5 +67,5 @@ Game：
 - 深色现代风格，紫色/蓝色点缀；无外部字体/CDN 依赖（只用系统字体）。
 - 单页应用，`ui/index.html` + `ui/app.css` + `ui/app.js`，纯原生 JS，无构建步骤。
 - 自定义标题栏（frameless），最小化/最大化/关闭按钮放右上角，标题栏可拖动。
-- 成就卡片网格、搜索框、筛选（全部/已解锁/未解锁）、全选/反选按钮、进度环、统计表格可编辑。
+- 成就卡片网格、搜索框、筛选（全部/已解锁/未解锁/稀有）、全选/反选按钮、进度环、统计表格可编辑。
 - 键盘可用（Esc 关闭弹窗，Ctrl+S 保存，Ctrl+F 聚焦搜索）。

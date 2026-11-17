@@ -19,9 +19,20 @@
   var SVG_CHECK = '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.4 6.3 4.9 8.8 9.6 3.4"/></svg>';
   var SVG_CLOSE = '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M3.2 3.2 8.8 8.8M8.8 3.2 3.2 8.8"/></svg>';
   var SVG_CLOCK = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="5.6"/><path d="M8 5v3.2l2.1 1.3"/></svg>';
+  var SVG_RARE = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.4 13.6 8 8 13.6 2.4 8Z"/></svg>';
   var SVG_LOCK = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.4" y="7" width="9.2" height="6.4" rx="1.7"/><path d="M5.7 7V5.3a2.3 2.3 0 0 1 4.6 0V7"/></svg>';
 
   var TYPE_LABEL = { normal: '正式版', demo: '试玩', mod: '模组', junk: '其他' };
+
+  // 稀有成就：全服解锁率低于阈值。数据来自 Steam 的 GetAchievementAchievedPercent。
+  var RARE_PCT = 5;
+  // 稀有度档位：pct=0 表示不按稀有度过滤
+  var RARE_OPTIONS = [
+    { label: '全部成就', pct: 0 },
+    { label: '稀有 < 1%', pct: 1 },
+    { label: '稀有 < 5%', pct: 5 },
+    { label: '稀有 < 10%', pct: 10 }
+  ];
   var RING_C = 2 * Math.PI * 52;
 
   /* ---------------------------------------------------------------------------
@@ -299,7 +310,8 @@
       achieved: !!(a && a.achieved),
       unlockTime: a && typeof a.unlockTime === 'number' && a.unlockTime > 0 ? a.unlockTime : null,
       hidden: !!(a && a.hidden),
-      protect: !!(a && a.protect)
+      protect: !!(a && a.protect),
+      rarity: a && typeof a.rarity === 'number' && a.rarity >= 0 ? a.rarity : -1
     };
   }
 
@@ -706,10 +718,27 @@
 
   /* ---------- Game ---------- */
 
+  // 全服解锁率是否低于阈值（rarity < 0 表示 Steam 没有给出百分比，不算稀有）
+  function isRareAt(a, pct) {
+    return !!a && typeof a.rarity === 'number' && a.rarity >= 0 && a.rarity < pct;
+  }
+
+  function isRare(a) {
+    return isRareAt(a, RARE_PCT);
+  }
+
+  function fmtPct(v) {
+    if (typeof v !== 'number' || !isFinite(v) || v < 0) return '—';
+    if (v >= 10) return Math.round(v) + '%';
+    if (v >= 1) return (Math.round(v * 10) / 10) + '%';
+    return (Math.round(v * 100) / 100) + '%';
+  }
+
   function achMatches(a, on) {
     var filter = state.ui.filter;
     if (filter === 'unlocked' && !on) return false;
     if (filter === 'locked' && on) return false;
+    if (filter === 'rare' && !isRare(a)) return false;
     var q = state.ui.query.trim().toLowerCase();
     if (!q) return true;
     if (String(a.name).toLowerCase().indexOf(q) >= 0) return true;
@@ -738,6 +767,10 @@
     }
     if (own(state.pending.ach, a.id)) {
       out.push('<span class="tag tag--ok">待保存</span>');
+    }
+    if (isRare(a)) {
+      out.push('<span class="tag tag--rare" title="全服解锁率 ' + fmtPct(a.rarity) + '">' +
+        SVG_RARE + '稀有 ' + fmtPct(a.rarity) + '</span>');
     }
     if (a.protect) {
       out.push('<span class="tag tag--protect">' + SVG_LOCK + '受保护</span>');
@@ -889,7 +922,9 @@
         els.achEmptyText.textContent = 'Steam 未返回任何成就数据，可能该游戏不支持成就系统。';
       } else {
         els.achEmptyTitle.textContent = '没有匹配的成就';
-        els.achEmptyText.textContent = '换个关键词，或切换「全部 / 已解锁 / 未解锁」。';
+        els.achEmptyText.textContent = state.ui.filter === 'rare'
+          ? '这个游戏没有全服解锁率低于 ' + RARE_PCT + '% 的成就。'
+          : '换个关键词，或切换「全部 / 已解锁 / 未解锁 / 稀有」。';
       }
     } else {
       els.achGrid.innerHTML = list.map(achCardHtml).join('');
@@ -1292,12 +1327,14 @@
       toast('info', '没有可解锁的成就', '该游戏所有可修改的成就都已经解锁了。');
       return;
     }
-    openRandomModal(pool.length);
+    openRandomModal(pool);
   }
 
-  function openRandomModal(available) {
+  function openRandomModal(pool) {
     closeModal();
-    var sel = { count: 0, gap: 1 };
+    var list = Array.isArray(pool) ? pool : [];
+    var available = list.length;
+    var sel = { count: 0, gap: 1, rare: 0 };
     var el = document.createElement('div');
     el.className = 'modal';
     el.setAttribute('role', 'dialog');
@@ -1308,24 +1345,56 @@
     parts.push('<span class="modal__ico modal__ico--info">' + ICON.info + '</span>');
     parts.push('<h2 class="modal__title">随机时间解锁</h2>');
     parts.push('</div>');
+    var rarityKnown = list.some(function (a) { return a && typeof a.rarity === 'number' && a.rarity >= 0; });
+    var rareCount = list.filter(isRare).length;
+
     parts.push('<p class="modal__text">Steam 只认“解锁那一刻”的真实时间，不接受伪造的历史时间。' +
       '所以这里按随机间隔逐个写入，每个成就自然拿到不同的解锁时间。' +
-      '当前有 ' + available + ' 个可解锁成就。解锁期间请保持窗口打开。</p>');
+      '当前有 ' + available + ' 个可解锁成就' +
+      (rarityKnown ? '，其中 ' + rareCount + ' 个全服解锁率低于 ' + RARE_PCT + '%' : '') +
+      '。解锁期间请保持窗口打开。</p>');
 
     function groupHtml(key, label, items) {
       var h = ['<div class="opt-group" data-key="' + key + '">'];
       h.push('<span class="opt-group__label">' + esc(label) + '</span>');
       h.push('<div class="opt-row">');
       for (var i = 0; i < items.length; i++) {
-        h.push('<button type="button" class="opt' + (i === sel[key] ? ' is-active' : '') +
-          '" data-value="' + i + '">' + esc(items[i].label) + '</button>');
+        var it = items[i];
+        var extra = it && it.pct > 0 ? ' data-rare="' + it.pct + '"' : '';
+        var dim = it && it.dim ? ' is-dim' : '';
+        h.push('<button type="button" class="opt' + (i === sel[key] ? ' is-active' : '') + dim +
+          '" data-value="' + i + '"' + extra + '>' + esc(it.label) + '</button>');
       }
       h.push('</div></div>');
       return h.join('');
     }
 
-    var counts = countOptions(available);
+    // 稀有度档位：先选范围，再定数量，所以候选池跟着档位变化
+    function poolFor(rareIdx) {
+      var pct = (RARE_OPTIONS[rareIdx] || RARE_OPTIONS[0]).pct;
+      if (!pct) return list;
+      return list.filter(function (a) { return isRareAt(a, pct); });
+    }
 
+    // 稀有档位里一个候选都没有的，显示为不可选（0 个）
+    function rareItems() {
+      var out = [];
+      for (var i = 0; i < RARE_OPTIONS.length; i++) {
+        var o = RARE_OPTIONS[i];
+        var n = poolFor(i).length;
+        out.push({ label: o.label + (n > 0 ? '（' + n + '）' : '（0）'), pct: o.pct, dim: n === 0 });
+      }
+      return out;
+    }
+
+    // 数量档位跟着稀有范围走：换了范围，可解锁数就变了
+    function activeCounts() {
+      return countOptions(poolFor(sel.rare).length);
+    }
+
+    var counts = activeCounts();
+
+    parts.push(groupHtml('rare', '解锁范围', rareItems()));
     parts.push(groupHtml('count', '解锁数量', counts));
     parts.push(groupHtml('gap', '解锁间隔', RANDOM_GAPS));
 
@@ -1396,8 +1465,9 @@
       if (!isCustom) return;
       var lo = readCustom();
       if (gapHint) {
-        var picked = counts[sel.count] || counts[0];
-        var n = picked.value > 0 ? Math.min(picked.value, available) : available;
+        var avail = poolFor(sel.rare).length;
+        var picked = activeCounts()[sel.count] || activeCounts()[0];
+        var n = picked.value > 0 ? Math.min(picked.value, avail) : avail;
         gapHint.textContent = '每个成就之间随机等 ' + fmtGap(lo.minGap) + ' – ' + fmtGap(lo.maxGap) +
           '；共 ' + n + ' 个成就，整轮大约需要 ' + fmtGap(n * lo.gapMid) + '。';
       }
@@ -1420,7 +1490,13 @@
           if (btns[i] === opt) btns[i].classList.add('is-active');
           else btns[i].classList.remove('is-active');
         }
-        if (key === 'gap' || key === 'count') syncCustom();
+        if (key === 'rare') {
+          // 换了解锁范围，数量档位要重算（原选择可能超出新的候选数）
+          var box = el.querySelector('.opt-group[data-key="count"]');
+          sel.count = 0;
+          if (box) box.outerHTML = groupHtml('count', '解锁数量', activeCounts());
+        }
+        if (key === 'gap' || key === 'count' || key === 'rare') syncCustom();
         return;
       }
       var hit = e.target.closest ? e.target.closest('[data-role]') : null;
@@ -1430,11 +1506,28 @@
         return;
       }
       if (role === 'ok') {
+        var avail = poolFor(sel.rare).length;
+        if (avail <= 0) {
+          toast('info', '这个范围没有可解锁的成就',
+            RARE_OPTIONS[sel.rare] && RARE_OPTIONS[sel.rare].pct > 0
+              ? '换个更大的范围吧，当前范围里没有满足条件的成就。'
+              : '该游戏所有可修改的成就都已经解锁了。');
+          return;
+        }
         var gap = RANDOM_GAPS[sel.gap] || RANDOM_GAPS[1];
-        var entry = counts[sel.count] || counts[0];
+        var opts = activeCounts();
+        var entry = opts[sel.count] || opts[0];
         var lo = gap.custom ? readCustom().minGap : gap.min;
         var hi = gap.custom ? readCustom().maxGap : gap.max;
-        startRandomUnlock({ count: entry.value, minGap: lo, maxGap: hi, delay: Math.min(5, lo) });
+        var rarePct = (RARE_OPTIONS[sel.rare] || RARE_OPTIONS[0]).pct;
+        startRandomUnlock({
+          count: entry.value,
+          minGap: lo,
+          maxGap: hi,
+          delay: Math.min(5, lo),
+          rareOnly: rarePct > 0,
+          rarePct: rarePct > 0 ? rarePct : RARE_PCT
+        });
       }
     });
 
@@ -1464,7 +1557,9 @@
       count: cfg.count,
       minGap: cfg.minGap,
       maxGap: cfg.maxGap,
-      delay: cfg.delay
+      delay: cfg.delay,
+      rareOnly: !!cfg.rareOnly,
+      rarePct: cfg.rarePct || RARE_PCT
     });
   }
 
@@ -1712,7 +1807,15 @@
         achieved: achieved,
         unlockTime: achieved ? Math.floor(Date.now() / 1000) - Math.floor(rng() * 30000000) : null,
         hidden: rng() < 0.08,
-        protect: rng() < 0.06
+        protect: rng() < 0.06,
+        // 演示数据：约三分之一落到稀有区间，方便验证「稀有」筛选与「仅解锁稀有成就」
+        rarity: (function () {
+          var roll = rng();
+          if (roll < 0.06) return Math.round(rng() * 90) / 100 + 0.05;
+          if (roll < 0.18) return Math.round((1 + rng() * 4) * 10) / 10;
+          if (roll < 0.34) return Math.round((5 + rng() * 5) * 10) / 10;
+          return Math.round((10 + rng() * 60) * 10) / 10;
+        })()
       });
     }
 
@@ -2279,7 +2382,7 @@
   }
 
   window.SAM = {
-    version: '1.1.0',
+    version: '1.2.0',
     handleEvent: handleEvent,
     mock: enterMock,
     getState: function () {

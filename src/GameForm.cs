@@ -24,6 +24,9 @@ namespace SAM.Modern
         private bool _schemaLoaded;
         private bool _requesting;
 
+        // 全服解锁百分比（稀有度）：成就 id -> 0-100 的百分比
+        private readonly Dictionary<string, float> _rarity = new Dictionary<string, float>(StringComparer.Ordinal);
+
         // 随机解锁（按随机间隔逐个解锁，Steam 才会为每个成就记录不同的真实时间）
         private readonly Timer _unlockTimer;
         private readonly List<string> _unlockQueue = new List<string>();
@@ -34,6 +37,9 @@ namespace SAM.Modern
         private bool _unlockRunning;
 
         private const int MaxUnlockGap = 7 * 24 * 60 * 60;
+
+        /// <summary>稀有成就的默认判定线：全服解锁率低于 5%。</summary>
+        private const double DefaultRarePercent = 5.0;
 
         public GameForm(SteamHost host, long appId)
             : base("SAM Modern  ·  成就管理")
@@ -83,6 +89,16 @@ namespace SAM.Modern
             if (this._requesting) return;
             this._requesting = true;
             this.Channel.Status("正在请求 Steam 统计数据…", true);
+            // 先让 Steam 去取全服成就百分比，等统计数据回来时百分比通常已经就绪
+            try
+            {
+                this._host.Client.SteamUserStats.RequestGlobalAchievementPercentages((uint)this._appId);
+            }
+            catch (Exception error)
+            {
+                Log.Write("RequestGlobalAchievementPercentages failed", error);
+            }
+
             try
             {
                 this._host.Client.SteamUserStats.RequestUserStats(this._host.SteamId);
@@ -136,7 +152,64 @@ namespace SAM.Modern
                 this._schemaLoaded = true;
             }
 
+            this.LoadRarity();
             this.PushGame();
+        }
+
+        /// <summary>读取每个成就的全服解锁百分比（Steam 的 GetAchievementAchievedPercent）。</summary>
+        private void LoadRarity()
+        {
+            this._rarity.Clear();
+            var api = this._host.Client.SteamUserStats;
+            int ok = 0;
+            foreach (var def in this._definitions)
+            {
+                float percent;
+                try
+                {
+                    if (api.GetAchievementAchievedPercent(def.Id, out percent) && percent > 0f)
+                    {
+                        this._rarity[def.Id] = percent;
+                        ok++;
+                    }
+                }
+                catch (Exception error)
+                {
+                    Log.Write("GetAchievementAchievedPercent failed: " + def.Id, error);
+                }
+            }
+            Log.Write("rarity loaded: " + ok + "/" + this._definitions.Count);
+        }
+
+        /// <summary>判断某个成就是否稀有（全服解锁率低于阈值）。读不到百分比的一律不算稀有。</summary>
+        private bool IsRare(string achievementId, double rarePct)
+        {
+            float percent;
+            if (this._rarity.TryGetValue(achievementId, out percent) == false)
+            {
+                float live;
+                try
+                {
+                    if (this._host.Client.SteamUserStats.GetAchievementAchievedPercent(achievementId, out live) == false)
+                    {
+                        return false;
+                    }
+                }
+                catch (Exception error)
+                {
+                    Log.Write("GetAchievementAchievedPercent failed: " + achievementId, error);
+                    return false;
+                }
+                this._rarity[achievementId] = live;
+                percent = live;
+            }
+            return percent > 0f && percent < rarePct;
+        }
+
+        private static string FormatPercent(double value)
+        {
+            if (value >= 10) return value.ToString("0.#", CultureInfo.InvariantCulture) + "%";
+            return value.ToString("0.##", CultureInfo.InvariantCulture) + "%";
         }
 
         private void PushGame()
@@ -160,6 +233,9 @@ namespace SAM.Modern
                 string locked = this.IconUrl(def.IconLocked);
                 if (locked == null) locked = normal;
 
+                float percent;
+                double rarity = this._rarity.TryGetValue(def.Id, out percent) ? percent : -1.0;
+
                 var item = new JsonBuilder();
                 item.BeginObject()
                     .Name("id").Str(def.Id)
@@ -171,6 +247,7 @@ namespace SAM.Modern
                     .Name("unlockTime").Num(achieved && unlockTime > 0 ? (long)unlockTime : 0)
                     .Name("hidden").Bool(def.IsHidden)
                     .Name("protect").Bool((def.Permission & 3) != 0)
+                    .Name("rarity").Num(rarity)
                     .EndObject();
                 achievements.Add(item.ToString());
             }
@@ -341,6 +418,8 @@ namespace SAM.Modern
             int minGap = (int)Math.Round(JsonParser.GetNumber(message, "minGap", 15));
             int maxGap = (int)Math.Round(JsonParser.GetNumber(message, "maxGap", 45));
             int delay = (int)Math.Round(JsonParser.GetNumber(message, "delay", 5));
+            bool rareOnly = JsonParser.GetBool(message, "rareOnly", false);
+            double rarePct = JsonParser.GetNumber(message, "rarePct", DefaultRarePercent);
 
             // 自定义间隔可以按「天」描述，所以上限放宽到 7 天
             if (minGap < 1) minGap = 1;
@@ -349,12 +428,14 @@ namespace SAM.Modern
             if (maxGap > MaxUnlockGap) maxGap = MaxUnlockGap;
             if (delay < 0) delay = 0;
             if (delay > 3600) delay = 3600;
+            if (rarePct <= 0 || rarePct > 100) rarePct = DefaultRarePercent;
 
             var api = this._host.Client.SteamUserStats;
             var candidates = new List<string>();
             foreach (var def in this._definitions)
             {
                 if ((def.Permission & 3) != 0) continue;
+                if (rareOnly && this.IsRare(def.Id, rarePct) == false) continue;
                 bool current = false;
                 try { if (api.GetAchievement(def.Id, out current) == false) continue; }
                 catch (Exception error) { Log.Write("GetAchievement failed: " + def.Id, error); continue; }
@@ -364,7 +445,16 @@ namespace SAM.Modern
 
             if (candidates.Count == 0)
             {
-                this.Channel.Toast("info", "没有可解锁的成就", "该游戏所有可修改的成就都已经解锁了。");
+                if (rareOnly)
+                {
+                    this.Channel.Toast("info", "没有可解锁的稀有成就",
+                        "稀有成就（全服解锁率低于 " + FormatPercent(rarePct) + "）都已经解锁了，"
+                        + "或者这个游戏没有稀有成就。");
+                }
+                else
+                {
+                    this.Channel.Toast("info", "没有可解锁的成就", "该游戏所有可修改的成就都已经解锁了。");
+                }
                 return;
             }
 
@@ -389,10 +479,12 @@ namespace SAM.Modern
             this._unlockRunning = true;
 
             Log.Write("random unlock start: " + this._unlockQueue.Count + " achievements, gap "
-                + minGap + "-" + maxGap + "s, first delay " + delay + "s");
+                + minGap + "-" + maxGap + "s, first delay " + delay + "s"
+                + (rareOnly ? ", rare only <" + FormatPercent(rarePct) : ""));
 
             this.SendUnlockRun(delay, null, 0);
-            this.Channel.Status("随机解锁已开始：共 " + this._unlockQueue.Count + " 个成就，间隔 "
+            this.Channel.Status("随机解锁已开始：共 " + this._unlockQueue.Count
+                + (rareOnly ? " 个稀有成就" : " 个成就") + "，间隔 "
                 + FormatGap(minGap) + " – " + FormatGap(maxGap) + "，"
                 + (delay > 0 ? "约 " + FormatGap(delay) + "后解锁第一个。" : "正在解锁第一个…"), true);
 
