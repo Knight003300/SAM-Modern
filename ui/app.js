@@ -91,6 +91,23 @@
     return n < 10 ? '0' + n : String(n);
   }
 
+  // 输入框逐字触发整表重绘，代价很高；统一走 120ms 防抖，回车/清空仍然立即生效。
+  function debounce(fn, wait) {
+    var timer = 0;
+    var wrapped = function () {
+      var args = arguments, self = this;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(function () {
+        timer = 0;
+        fn.apply(self, args);
+      }, wait || 120);
+    };
+    wrapped.cancel = function () {
+      if (timer) { clearTimeout(timer); timer = 0; }
+    };
+    return wrapped;
+  }
+
   function fmtTime(ts) {
     var sec = Number(ts);
     if (!sec || !isFinite(sec) || sec <= 0) return '';
@@ -142,7 +159,7 @@
 
   function monoStyle(size) {
     return 'font-size:' + size + 'px;font-weight:800;letter-spacing:-1.5px;line-height:1;' +
-      'background:linear-gradient(135deg,#7c5cff,#4aa8ff);-webkit-background-clip:text;' +
+      'background:linear-gradient(160deg,#4aa9ff,#0a84ff);-webkit-background-clip:text;' +
       'background-clip:text;color:transparent;opacity:.92;';
   }
 
@@ -1012,8 +1029,8 @@
     if (o.text) parts.push('<p class="modal__text">' + esc(o.text) + '</p>');
     if (o.checkboxLabel) {
       parts.push('<label style="display:flex;align-items:center;gap:8px;font-size:12.5px;' +
-        'color:#a6b0c3;cursor:pointer;user-select:none;">' +
-        '<input type="checkbox" id="samModalCheck" style="width:15px;height:15px;accent-color:#7c5cff;cursor:pointer;" />' +
+        'color:var(--text-2);cursor:pointer;user-select:none;">' +
+        '<input type="checkbox" id="samModalCheck" style="width:15px;height:15px;accent-color:var(--brand-1);cursor:pointer;" />' +
         '<span>' + esc(o.checkboxLabel) + '</span></label>');
     }
     parts.push('<div class="modal__foot">');
@@ -2090,17 +2107,24 @@
 
   function bindPicker() {
     if (els.pickerSearch) {
+      var queuePickerRender = debounce(function () {
+        renderPicker();
+        renderStatus();
+      }, 120);
       els.pickerSearch.addEventListener('input', function () {
         state.picker.query = els.pickerSearch.value;
         setHidden(els.pickerSearchClear, state.picker.query.length === 0);
-        renderPicker();
-        renderStatus();
+        queuePickerRender();
       });
       els.pickerSearch.addEventListener('keydown', function (e) {
         if (e.key === 'Escape') {
           els.pickerSearch.value = '';
           state.picker.query = '';
           setHidden(els.pickerSearchClear, true);
+          renderPicker();
+          renderStatus();
+        } else if (e.key === 'Enter') {
+          queuePickerRender.cancel();
           renderPicker();
           renderStatus();
         }
@@ -2111,6 +2135,7 @@
         els.pickerSearch.value = '';
         state.picker.query = '';
         setHidden(els.pickerSearchClear, true);
+        if (queuePickerRender) queuePickerRender.cancel();
         renderPicker();
         renderStatus();
         els.pickerSearch.focus();
@@ -2164,16 +2189,23 @@
       });
     }
     if (els.achSearch) {
+      var queueAchRender = debounce(function () {
+        renderGame();
+      }, 120);
       els.achSearch.addEventListener('input', function () {
         state.ui.query = els.achSearch.value;
         setHidden(els.achSearchClear, state.ui.query.length === 0);
-        renderGame();
+        queueAchRender();
       });
       els.achSearch.addEventListener('keydown', function (e) {
         if (e.key === 'Escape') {
           els.achSearch.value = '';
           state.ui.query = '';
           setHidden(els.achSearchClear, true);
+          queueAchRender.cancel();
+          renderGame();
+        } else if (e.key === 'Enter') {
+          queueAchRender.cancel();
           renderGame();
         }
       });
@@ -2183,6 +2215,7 @@
         els.achSearch.value = '';
         state.ui.query = '';
         setHidden(els.achSearchClear, true);
+        if (queueAchRender) queueAchRender.cancel();
         renderGame();
         els.achSearch.focus();
       });
@@ -2382,7 +2415,7 @@
   }
 
   window.SAM = {
-    version: '1.2.0',
+    version: '1.3.0',
     handleEvent: handleEvent,
     mock: enterMock,
     getState: function () {

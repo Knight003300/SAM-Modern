@@ -5,6 +5,7 @@ using System.IO;
 using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace SAM.Modern
 {
@@ -18,6 +19,8 @@ namespace SAM.Modern
         private static readonly Regex GamePattern = new Regex(
             "<game(?:\\s+type=\"([^\"]*)\")?\\s*>(\\d+)</game>",
             RegexOptions.CultureInvariant);
+
+        private static int _refreshing;
 
         public sealed class CatalogEntry
         {
@@ -33,52 +36,62 @@ namespace SAM.Modern
             }
         }
 
-        /// <summary>读取目录：优先使用未过期缓存，否则下载；下载失败则退回旧缓存。</summary>
+        /// <summary>读取目录：缓存存在就立即使用（过期时后台刷新），不存在则同步下载；失败返回 null，绝不抛给上层。</summary>
         public static List<CatalogEntry> Load(out string source)
         {
             string path = CachePath;
             string text = null;
             source = "cache";
 
-            bool cached = false;
+            bool stale = false;
             try
             {
-                if (File.Exists(path) &&
-                    DateTime.UtcNow - File.GetLastWriteTimeUtc(path) < CacheMaxAge)
+                if (File.Exists(path))
                 {
                     text = File.ReadAllText(path, Encoding.UTF8);
-                    cached = !string.IsNullOrEmpty(text);
+                    if (string.IsNullOrEmpty(text) == false)
+                    {
+                        stale = DateTime.UtcNow - File.GetLastWriteTimeUtc(path) >= CacheMaxAge;
+                        if (stale) source = "stale-cache";
+                    }
                 }
             }
-            catch (Exception error) { Log.Write("games.xml cache read failed", error); }
+            catch (Exception error)
+            {
+                Log.Write("games.xml cache read failed", error);
+                text = null;
+            }
 
-            if (cached == false)
+            // 旧缓存先用起来，刷新交给后台线程，避免 UI 线程被网络卡住。
+            if (stale) StartBackgroundRefresh(path);
+
+            if (string.IsNullOrEmpty(text))
             {
                 try
                 {
                     text = Download();
-                    source = "network";
-                    try
+                    if (string.IsNullOrEmpty(text) == false)
                     {
-                        Directory.CreateDirectory(Path.GetDirectoryName(path));
-                        File.WriteAllText(path, text, Encoding.UTF8);
+                        source = "network";
+                        WriteCache(path, text);
                     }
-                    catch (Exception error) { Log.Write("games.xml cache write failed", error); }
                 }
                 catch (Exception error)
                 {
-                    Log.Write("games.xml download failed", error);
-                    source = "stale-cache";
-                    try
-                    {
-                        if (File.Exists(path)) text = File.ReadAllText(path, Encoding.UTF8);
-                    }
-                    catch (Exception inner) { Log.Write("games.xml stale cache read failed", inner); }
+                    Log.Write("game catalog download failed", error);
+                    return null;
                 }
             }
 
             if (string.IsNullOrEmpty(text)) return null;
 
+            List<CatalogEntry> list = Parse(text);
+            Log.Write("game catalog loaded from " + source + ": " + list.Count + " entries");
+            return list;
+        }
+
+        private static List<CatalogEntry> Parse(string text)
+        {
             var list = new List<CatalogEntry>();
             try
             {
@@ -95,19 +108,69 @@ namespace SAM.Modern
                 }
             }
             catch (Exception error) { Log.Write("games.xml parse failed", error); }
-
-            Log.Write("game catalog loaded from " + source + ": " + list.Count + " entries");
             return list;
         }
 
         private static string Download()
         {
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
-            using (var client = new WebClient())
+
+            var request = (HttpWebRequest)WebRequest.Create(RemoteUrl);
+            request.UserAgent = "SAM.Modern";
+            request.Timeout = 12000;
+            request.ReadWriteTimeout = 12000;
+            request.KeepAlive = false;
+            request.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
+
+            using (var response = (HttpWebResponse)request.GetResponse())
+            using (var stream = response.GetResponseStream())
+            using (var reader = new StreamReader(stream, Encoding.UTF8))
             {
-                client.Headers.Add("User-Agent", "SAM.Modern");
-                byte[] bytes = client.DownloadData(new Uri(RemoteUrl));
-                return Encoding.UTF8.GetString(bytes);
+                return reader.ReadToEnd();
+            }
+        }
+
+        private static void WriteCache(string path, string text)
+        {
+            try
+            {
+                string directory = Path.GetDirectoryName(path);
+                if (string.IsNullOrEmpty(directory) == false) Directory.CreateDirectory(directory);
+                File.WriteAllText(path, text, new UTF8Encoding(false));
+            }
+            catch (Exception error) { Log.Write("games.xml cache write failed", error); }
+        }
+
+        /// <summary>后台刷新过期缓存；同一时间只跑一个刷新任务，且不触碰 UI/Channel。</summary>
+        private static void StartBackgroundRefresh(string path)
+        {
+            if (Interlocked.CompareExchange(ref _refreshing, 1, 0) != 0) return;
+
+            try
+            {
+                ThreadPool.QueueUserWorkItem(delegate(object state)
+                {
+                    try
+                    {
+                        string text = Download();
+                        if (string.IsNullOrEmpty(text))
+                        {
+                            Log.Write("game catalog background refresh failed: empty response");
+                            return;
+                        }
+
+                        List<CatalogEntry> list = Parse(text);
+                        WriteCache(path, text);
+                        Log.Write("game catalog cache refreshed: " + list.Count + " entries");
+                    }
+                    catch (Exception error) { Log.Write("game catalog background refresh failed", error); }
+                    finally { Interlocked.Exchange(ref _refreshing, 0); }
+                });
+            }
+            catch (Exception error)
+            {
+                Log.Write("game catalog background refresh queue failed", error);
+                Interlocked.Exchange(ref _refreshing, 0);
             }
         }
 
