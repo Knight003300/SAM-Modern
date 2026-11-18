@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
+using System.Text;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace SAM.Modern
@@ -23,6 +26,10 @@ namespace SAM.Modern
         private readonly string _language;
         private bool _schemaLoaded;
         private bool _requesting;
+
+        // 成就架构在窗口创建阶段就后台预读，等 Steam 回调回来时通常已经好了，
+        // 省掉「统计数据已到、还在解析 schema」的那几百毫秒。
+        private readonly Task<SchemaLoader.Preloaded> _schemaPreload;
 
         // 全服解锁百分比（稀有度）：成就 id -> 0-100 的百分比
         private readonly Dictionary<string, float> _rarity = new Dictionary<string, float>(StringComparer.Ordinal);
@@ -65,11 +72,20 @@ namespace SAM.Modern
             this._unlockTimer = new Timer();
             this._unlockTimer.Tick += this.OnUnlockTick;
 
+            string language = this._language;
+            long appIdForSchema = appId;
+            this._schemaPreload = Task.Run(delegate { return SchemaLoader.Preload(appIdForSchema, language); });
+
             Log.Write("GameForm ctor end");
         }
 
         protected override void OnPageReady()
         {
+            // 上次的快照直接塞进 ready 事件里一起发：页面只收一条消息就能画出完整界面。
+            // 拆成两条消息时，第一条 ready 会让页面先渲染「0 个成就 / 转圈」的空骨架，
+            // 第二条才把内容填进去，中间那一两帧就是切换时看到的闪烁。
+            string cachedJson = this.LoadGameCacheJson();
+
             var b = new JsonBuilder();
             b.BeginObject()
                 .Name("ev").Str("ready")
@@ -77,10 +93,16 @@ namespace SAM.Modern
                 .Name("appId").Num(this._appId)
                 .Name("gameName").Str(this._gameName)
                 .Name("steamId").Num((long)this._host.SteamId)
-                .Name("language").Str(this._language)
-                .EndObject();
+                .Name("language").Str(this._language);
+            if (string.IsNullOrEmpty(cachedJson) == false) b.Name("cachedGame").Raw(cachedJson);
+            b.EndObject();
             this.Channel.Send(b);
+            if (string.IsNullOrEmpty(cachedJson) == false)
+            {
+                Log.Write("ready with cached game: " + cachedJson.Length + " bytes");
+            }
 
+            // 随后再向 Steam 要新数据，回来时整表覆盖。
             this.Retrieve();
         }
 
@@ -128,9 +150,23 @@ namespace SAM.Modern
 
             if (this._schemaLoaded == false)
             {
-                List<AchievementDef> achievements;
-                List<StatDefinition> stats;
-                bool ok = SchemaLoader.Load(this._appId, this._language, out achievements, out stats);
+                SchemaLoader.Preloaded preloaded = null;
+                try
+                {
+                    if (this._schemaPreload != null) preloaded = this._schemaPreload.Result;
+                }
+                catch (Exception error)
+                {
+                    Log.Write("schema preload failed", error);
+                }
+
+                List<AchievementDef> achievements = preloaded == null ? null : preloaded.Achievements;
+                List<StatDefinition> stats = preloaded == null ? null : preloaded.Stats;
+                bool ok = preloaded != null && preloaded.Ok;
+                if (ok == false)
+                {
+                    ok = SchemaLoader.Load(this._appId, this._language, out achievements, out stats);
+                }
                 if (ok == false)
                 {
                     this.Channel.Status("读取成就架构失败。", false);
@@ -297,9 +333,62 @@ namespace SAM.Modern
                 .EndObject()
                 .EndObject();
 
-            this.Channel.Send(b);
+            string json = b.ToString();
+            this.Channel.Send(json);
+            this.SaveGameCache(json);
             this.Channel.Status("已获取 " + this._definitions.Count + " 个成就、"
                 + this._statDefinitions.Count + " 项统计。", false);
+        }
+
+        /// <summary>每个游戏的成就 / 统计快照文件（按 appId 分文件）。</summary>
+        private static string GameCachePath(long appId)
+        {
+            return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cache",
+                "game-" + appId.ToString(CultureInfo.InvariantCulture) + ".json");
+        }
+
+        private void SaveGameCache(string json)
+        {
+            if (string.IsNullOrEmpty(json)) return;
+            try
+            {
+                string path = GameCachePath(this._appId);
+                string directory = Path.GetDirectoryName(path);
+                if (Directory.Exists(directory) == false) Directory.CreateDirectory(directory);
+                // 先写临时文件再改名：另一个进程可能正在读，改名保证它读到的永远是完整文件。
+                string temp = path + ".tmp";
+                File.WriteAllText(temp, json, Encoding.UTF8);
+                if (File.Exists(path)) File.Delete(path);
+                File.Move(temp, path);
+                Log.Write("game cache saved: " + json.Length + " bytes");
+            }
+            catch (Exception error)
+            {
+                Log.Write("game cache save failed", error);
+            }
+        }
+
+        /// <summary>读取上次成功推送的游戏数据快照；没有或不可用时返回 null。</summary>
+        private string LoadGameCacheJson()
+        {
+            try
+            {
+                string path = GameCachePath(this._appId);
+                if (File.Exists(path) == false) return null;
+                string json = File.ReadAllText(path, Encoding.UTF8);
+                if (string.IsNullOrEmpty(json) || json.Length < 2 || json[0] != '{') return null;
+
+                // 文件名已按 appId 区分，这里再校验一次，避免陈旧文件串味。
+                var probe = JsonParser.ParseObject(json);
+                if (probe == null) return null;
+                if ((long)JsonParser.GetNumber(probe, "appId", -1) != this._appId) return null;
+                return json;
+            }
+            catch (Exception error)
+            {
+                Log.Write("game cache load failed", error);
+                return null;
+            }
         }
 
         private string IconUrl(string icon)

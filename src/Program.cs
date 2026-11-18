@@ -90,6 +90,15 @@ namespace SAM.Modern
                     if (i + 1 < args.Length) WebShell.AutoOpenAppId = args[++i];
                     continue;
                 }
+                if (string.Equals(arg, "--parent-pid", StringComparison.OrdinalIgnoreCase))
+                {
+                    int parentPid;
+                    if (i + 1 < args.Length && int.TryParse(args[++i], NumberStyles.Integer, CultureInfo.InvariantCulture, out parentPid))
+                    {
+                        WebShell.ParentPid = parentPid;
+                    }
+                    continue;
+                }
                 if (string.Equals(arg, "--shot", StringComparison.OrdinalIgnoreCase))
                 {
                     if (i + 1 < args.Length) WebShell.ShotPath = args[++i];

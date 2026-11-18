@@ -72,6 +72,36 @@ namespace SAM.Modern
             return fallback;
         }
 
+        /// <summary>后台预读结果：解析失败的容器为 null，调用方回落到同步 Load。</summary>
+        internal sealed class Preloaded
+        {
+            public bool Ok;
+            public List<AchievementDef> Achievements;
+            public List<StatDefinition> Stats;
+        }
+
+        /// <summary>在后台线程解析架构文件，返回可直接使用的结果（线程安全：只读本地文件）。</summary>
+        public static Preloaded Preload(long appId, string language)
+        {
+            var result = new Preloaded();
+            try
+            {
+                List<AchievementDef> achievements;
+                List<StatDefinition> stats;
+                if (Load(appId, language, out achievements, out stats))
+                {
+                    result.Ok = true;
+                    result.Achievements = achievements;
+                    result.Stats = stats;
+                }
+            }
+            catch (Exception error)
+            {
+                Log.Write("schema preload failed", error);
+            }
+            return result;
+        }
+
         public static bool Load(long appId, string language,
             out List<AchievementDef> achievements, out List<StatDefinition> stats)
         {

@@ -18,15 +18,17 @@ window.chrome.webview.addEventListener('message', e => handle(e.data));
 ## 3. 事件表（C# → JS）
 
 ### 通用
-- `{ ev:"ready", mode:"picker"|"game", appId, gameName, steamId, userName, language }`
+- `{ ev:"ready", mode:"picker"|"game", appId, gameName, steamId, userName, language, cachedGames?, cachedGame? }`
   启动完成时发一次。`mode` 决定显示哪个界面。
+  带 `cachedGames` / `cachedGame` 时，页面必须把这份上次的快照**和 ready 一起画完**再回 `ui/painted`：拆成两条消息会先渲染出「0 个成就 / 骨架屏」，那一两帧就是切换时的闪烁。C# 随后仍会发一次真实数据覆盖。
 - `{ ev:"status", text:"...", busy:true|false }` 状态栏文案 + 是否转圈。
 - `{ ev:"toast", kind:"info"|"success"|"error"|"warn", title:"...", text:"..." }` 右上角浮层提示（自动消失）。
 - `{ ev:"error", title:"...", text:"..." }` 需用户确认的错误（模态）。
 
 ### Picker（选游戏界面）
-- `{ ev:"games", games:[{ id:number, name:string, type:"normal"|"demo"|"mod"|"junk", capsule:string|null }], total:number }`
+- `{ ev:"games", games:[{ id:number, name:string, type:"normal"|"demo"|"mod"|"junk", capsule:string|null }], total:number, cached:boolean }`
   `capsule` 是完整 https 图片 URL（可能为 null → 显示占位图）。
+  `cached=true` 表示这是上次扫描的缓存快照（先上屏），后台扫描完成后会再发一次 `cached=false` 的完整列表。
 - `{ ev:"gamesProgress", scanning:number }` 扫描进度（可选，用于加载态文案）。
 
 ### Game（成就管理界面）
@@ -43,6 +45,11 @@ window.chrome.webview.addEventListener('message', e => handle(e.data));
 ## 4. 命令表（JS → C#）
 窗口控制（两种模式都可用）：
 - `{cmd:"win/minimize"}` / `{cmd:"win/maximize"}` / `{cmd:"win/close"}` / `{cmd:"win/drag"}`（标题栏按下时发，C# 接管拖动）
+
+生命周期上报（**必须实现**，否则窗口不会显示）：
+- `{cmd:"ui/ready"}`  页面 `load` 完成时发一次，C# 据此推数据。
+- `{cmd:"ui/painted", layoutMs:number, imageMs:number}`  首帧真正画完（含布局与可见图片解码）时发一次。C# 收到它才把窗口从屏幕外挪进来，保证用户看不到空壳或半截渲染。
+- `{cmd:"ui/error", kind, message, source, stack}`  页面异常回传，C# 只记日志（`sam-modern.log` 里是 `ui <kind>:`）。
 
 Picker：
 - `{cmd:"picker/reload"}`  重新扫描游戏库
@@ -69,3 +76,13 @@ Game：
 - 自定义标题栏（frameless），最小化/最大化/关闭按钮放右上角，标题栏可拖动。
 - 成就卡片网格、搜索框、筛选（全部/已解锁/未解锁/稀有）、全选/反选按钮、进度环、统计表格可编辑。
 - 键盘可用（Esc 关闭弹窗，Ctrl+S 保存，Ctrl+F 聚焦搜索）。
+
+## 7. 窗口接力与待命（C# 侧，供排查用）
+`steamclient.dll` 在一个进程里只能绑定一个 appId，所以换游戏必须换进程。接力流程：
+1. 旧进程 `Process.Start` 新进程，参数里带 `--hidden --ready <就绪文件> --bounds x,y,w,h [--max] [--parent-pid <旧进程PID>]`；
+2. 新进程隐藏启动（窗口摆在 `-32000,-32000`），建好 WebView2、页面画完首帧后显示窗口，并写就绪文件（先写 `.tmp` 再改名）；
+3. 旧进程每 15ms 轮询该文件，看到后：游戏库窗口 → `Hide()` 进入待命；游戏窗口 → 直接关闭。
+4. 游戏窗口返回游戏库时，写 `<程序目录>\relay\sam-modern-resume-<父PID>.txt`（内容 `x,y,w,h[|max]`，或 `quit` 表示连游戏库一起退出），待命的游戏库窗口轮询到后 `Show()` 出来并回写 `.ack`，游戏窗口收到 ack 后关闭；8 秒无 ack 则退回「起一个新的游戏库进程」。
+5. 游戏窗口没走唤回流程就退出（崩溃 / 被任务管理器结束）时，待命窗口检测到子进程消失后自己 `Show()` 出来。
+
+排查日志关键字：`relay launch` / `ready file written` / `relay ready` / `standby: hiding picker window` / `resume parent pid=` / `standby: resumed by child` / `standby: child exited without resume` / `WebView2 init timing:` / `ui reported painted` / `reveal timing:`。

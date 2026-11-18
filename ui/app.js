@@ -62,6 +62,7 @@
   var modalState = null;
   var saveGuard = 0;
   var handshakeSeen = false;
+  var paintedSent = false;
 
   /* ---------------------------------------------------------------------------
      3. 通用工具
@@ -264,6 +265,7 @@
   }
 
   function onReady(ev) {
+    readyAt = (window.performance && performance.now) ? performance.now() : Date.now();
     handshakeSeen = true;
     state.booted = true;
     state.meta.appId = num(ev.appId, 0);
@@ -276,15 +278,121 @@
     if (state.mode === 'game') {
       state.game.appId = state.meta.appId;
       state.game.name = state.meta.gameName;
+      // 主机把上次的快照塞在 ready 里一起发过来：直接一次画完整界面。
+      // 若分两步（先 ready 后 game），第一步会渲染出「0 个成就 / 转圈」的空骨架，
+      // 第二步才填内容 —— 切换时看到的那一两帧闪烁就是这么来的。
+      if (ev.cachedGame && typeof ev.cachedGame === 'object') {
+        ev.cachedGame.cached = true;
+        onGame(ev.cachedGame);
+        announcePainted();
+        return;
+      }
       state.game.loading = true;
       state.status.text = '正在读取成就与统计数据…';
       state.status.busy = true;
     } else {
+      if (Array.isArray(ev.cachedGames) && ev.cachedGames.length > 0) {
+        onGames({ games: ev.cachedGames, cached: true, total: ev.cachedGames.length });
+        announcePainted();
+        return;
+      }
       state.picker.loading = true;
       state.status.text = '正在扫描游戏库…';
       state.status.busy = true;
     }
     render();
+    announcePainted();
+  }
+
+  // 首屏已经画完（含布局、图片解码与首次绘制）再通知主机亮窗口。
+  // 主机收到 ui/painted 才把窗口从屏幕外挪进来：这样旧窗口会一直停在
+  // 「正确的上一页」，直到新窗口内容已就绪才交接，中间不会露出空壳。
+  var readyAt = 0;
+  var paintProbe = { layoutMs: 0, imageMs: 0 };
+
+  function announcePainted() {
+    if (paintedSent) return;
+    paintedSent = true;
+    var t0 = readyAt || 0;
+    afterPaint(function () {
+      paintProbe.layoutMs = Math.round(((window.performance && performance.now) ? performance.now() : Date.now()) - t0);
+      var t1 = (window.performance && performance.now) ? performance.now() : Date.now();
+      waitVisibleImages(function () {
+        paintProbe.imageMs = Math.round(((window.performance && performance.now) ? performance.now() : Date.now()) - t1);
+        afterPaint(function () {
+          send('ui/painted', { layoutMs: paintProbe.layoutMs, imageMs: paintProbe.imageMs });
+        });
+      });
+    });
+  }
+
+  // 两次 rAF：第一次回调在样式与布局之后，第二次回调之后浏览器才真正绘制。
+  function afterPaint(fn) {
+    var raf = window.requestAnimationFrame;
+    if (typeof raf !== 'function') {
+      fn();
+      return;
+    }
+    raf(function () {
+      raf(fn);
+    });
+  }
+
+  // 成就图标 / 封面是 WebView2 异步解码的：DOM 已经就位、文字已经排版，
+  // 但位图还没到，这时窗口亮起来就是一屏灰色占位块，再等 100~200ms 才
+  // 「啪」地变成图标。所以亮窗口之前先等视口附近的图片解码完。
+  // 只等视口附近的：下面几百个成就还在 lazy 队列里，等它们纯属白等；
+  // 并且最多等 IMAGE_WAIT_MS，绝不把窗口无限期留在屏幕外。
+  var IMAGE_WAIT_MS = 400;
+
+  function waitVisibleImages(done) {
+    var all = document.querySelectorAll('img');
+    var pending = [];
+    var limit = (window.innerHeight || 800) + 240;
+    for (var i = 0; i < all.length; i++) {
+      var img = all[i];
+      if (img.complete) continue;
+      // display:none 的容器（当前没在显示的另一个视图）里图片没有布局盒，
+      // 不能算「可见」，否则会白等它们到超时。
+      if (!img.getClientRects().length) continue;
+      var rect = img.getBoundingClientRect();
+      if (rect.bottom < -240 || rect.top > limit) continue;
+      pending.push(img);
+    }
+    if (pending.length === 0) {
+      done();
+      return;
+    }
+
+    var remaining = pending.length;
+    var finished = false;
+    var timer = setTimeout(flush, IMAGE_WAIT_MS);
+
+    function flush() {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      for (var k = 0; k < pending.length; k++) {
+        pending[k].removeEventListener('load', one);
+        pending[k].removeEventListener('error', one);
+      }
+      done();
+    }
+
+    function one() {
+      remaining--;
+      if (remaining <= 0) flush();
+    }
+
+    for (var j = 0; j < pending.length; j++) {
+      if (pending[j].complete) {
+        remaining--;
+        continue;
+      }
+      pending[j].addEventListener('load', one);
+      pending[j].addEventListener('error', one);
+    }
+    if (remaining <= 0) flush();
   }
 
   function onGames(ev) {
@@ -299,9 +407,12 @@
       };
     });
     state.picker.total = typeof ev.total === 'number' ? ev.total : state.picker.games.length;
+    var cached = !!ev.cached;
     state.picker.loading = false;
-    state.status.busy = false;
-    state.status.text = '扫描完成，共找到 ' + state.picker.total + ' 个游戏';
+    state.status.busy = cached;
+    state.status.text = cached
+      ? '正在刷新游戏库…'
+      : '扫描完成，共找到 ' + state.picker.total + ' 个游戏';
     if (state.mode !== 'picker') {
       state.mode = 'picker';
     }
@@ -351,6 +462,7 @@
 
   function onGame(ev) {
     var previousAppId = state.game.appId;
+    var cached = !!ev.cached;
     state.booted = true;
     state.mode = 'game';
     state.game.appId = num(ev.appId, state.meta.appId);
@@ -369,13 +481,17 @@
         ? ev.summary.unlocked
         : countUnlocked(state.game.achievements)
     };
+    // 缓存快照只是先垫一层内容，Steam 数据马上会再推一次并整表覆盖。
+    // 这里必须把 loading 关掉，否则 renderGame 只画转圈、不画列表，缓存就白推了。
     state.game.loading = false;
     state.pending = { ach: {}, stats: {} };
     state.saving = false;
     window.clearTimeout(saveGuard);
-    state.status.busy = false;
-    state.status.text = '已载入《' + state.game.name + '》：' +
-      state.game.achievements.length + ' 个成就、' + state.game.stats.length + ' 项统计';
+    state.status.busy = cached;
+    state.status.text = cached
+      ? '正在载入《' + state.game.name + '》…'
+      : '已载入《' + state.game.name + '》：' +
+        state.game.achievements.length + ' 个成就、' + state.game.stats.length + ' 项统计';
     render();
   }
 
@@ -679,7 +795,7 @@
   function gameCardHtml(g, index) {
     var mono = monogram(g.name);
     var hue = hash32('' + g.id) % 300;
-    var delay = Math.min(index * 22, 400);
+    var delay = Math.min(index * 8, 120);
     var out = [];
     out.push('<button type="button" class="game-card" data-id="' + esc(g.id) + '"');
     out.push(' style="animation-delay:' + delay + 'ms"');
@@ -944,10 +1060,42 @@
           : '换个关键词，或切换「全部 / 已解锁 / 未解锁 / 稀有」。';
       }
     } else {
-      els.achGrid.innerHTML = list.map(achCardHtml).join('');
+      renderAchGrid(list);
+      renderSideFacts();
+      return;
     }
     markLoadedImages();
     renderSideFacts();
+  }
+
+  /* 首帧只排可见的那十几张卡：一个游戏动辄 300+ 成就，一次性 innerHTML
+     会让浏览器对整表做样式计算与布局，实测首帧多花 150~200ms，正好卡在
+     「窗口该亮了」的关键路径上。剩下的卡片在首帧之后分块追加，用户看不到
+     （都在滚动条下方），但窗口能提前亮起来。 */
+  var ACH_FIRST_CHUNK = 24;
+  var achRenderToken = 0;
+
+  function renderAchGrid(list) {
+    var token = ++achRenderToken;
+    if (list.length <= ACH_FIRST_CHUNK) {
+      els.achGrid.innerHTML = list.map(achCardHtml).join('');
+      markLoadedImages();
+      return;
+    }
+    els.achGrid.innerHTML = list.slice(0, ACH_FIRST_CHUNK).map(achCardHtml).join('');
+    markLoadedImages();
+    var index = ACH_FIRST_CHUNK;
+    function step() {
+      if (token !== achRenderToken) return;
+      var end = Math.min(index + 64, list.length);
+      var html = '';
+      for (var i = index; i < end; i++) html += achCardHtml(list[i], i);
+      els.achGrid.insertAdjacentHTML('beforeend', html);
+      index = end;
+      if (index < list.length) setTimeout(step, 0);
+      else markLoadedImages();
+    }
+    setTimeout(step, 0);
   }
 
   function renderStats() {
@@ -2415,7 +2563,7 @@
   }
 
   window.SAM = {
-    version: '1.3.1',
+    version: '1.4.0',
     handleEvent: handleEvent,
     mock: enterMock,
     getState: function () {

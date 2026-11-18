@@ -77,7 +77,10 @@ namespace SAM.Modern
             {
                 // 不能靠 SetVisibleCore 抑制显示：那样句柄不会创建，OnLoad 不会执行，WebView2 也就永远初始化不了。
                 // 改为把窗口挪到屏幕外：照常显示/加载，就绪后再挪回目标位置。
-                this.ShowInTaskbar = false;
+                // 注意：不要在这里把 ShowInTaskbar 设成 false 再在亮窗口时改回 true ——
+                // WinForms 切换 ShowInTaskbar 会重建窗口句柄，实测吃掉 150ms 以上，
+                // 正好卡在「页面已画好、等窗口亮起」的关键路径上。
+                // 窗口在屏幕外不可见，任务栏按钮提前出现不到一秒，同 exe 会与旧窗口合并，用户无感。
                 this.StartPosition = FormStartPosition.Manual;
                 this.Location = OffScreenLocation;
             }
@@ -93,7 +96,10 @@ namespace SAM.Modern
             if (this._revealed) return;
             this._revealed = true;
 
-            this.ShowInTaskbar = true;
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            var trace = new System.Text.StringBuilder();
+            Action<string> mark = delegate (string name) { trace.Append(name).Append('=').Append(clock.ElapsedMilliseconds).Append(' '); };
+
             Size targetSize = this._explicitBounds ? StartupBounds.Size : new Size(1280, 840);
             if (targetSize.Width < 320 || targetSize.Height < 240) targetSize = new Size(1280, 840);
 
@@ -112,13 +118,19 @@ namespace SAM.Modern
 
             this.StartPosition = FormStartPosition.Manual;
             this.Bounds = new Rectangle(targetLocation, targetSize);
+            mark("bounds");
 
             if (this.Visible == false) this.Show();
+            mark("show");
             if (StartupMaximized) this.WindowState = FormWindowState.Maximized;
 
             this.Activate();
+            mark("activate");
             this.BringToFront();
+            mark("front");
             this.ApplyRoundedRegion();
+            mark("round");
+            Log.Write("reveal timing: " + trace.ToString().TrimEnd());
         }
 
         /// <summary>调试用：页面就绪后把 WebView2 渲染结果截图到该路径（为空则不截图）。</summary>
@@ -162,12 +174,16 @@ namespace SAM.Modern
 
             Log.Write("WebView2 init start (hidden=" + StartHidden + ", readyFile=" + (ReadyFile ?? "<none>") + ")");
 
+            var initClock = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 var dataFolder = ResolveDataFolder();
+                long folderMs = initClock.ElapsedMilliseconds;
 
                 this._environment = await CoreWebView2Environment.CreateAsync(null, dataFolder, null);
+                long envMs = initClock.ElapsedMilliseconds;
                 await this.Web.EnsureCoreWebView2Async(this._environment);
+                long coreMs = initClock.ElapsedMilliseconds;
 
                 var core = this.Web.CoreWebView2;
                 core.Settings.AreDefaultContextMenusEnabled = false;
@@ -196,7 +212,11 @@ namespace SAM.Modern
                 core.NewWindowRequested += (s, args) => { args.Handled = true; };
 
                 await core.AddScriptToExecuteOnDocumentCreatedAsync(UiDiagnosticsScript);
+                long scriptMs = initClock.ElapsedMilliseconds;
                 core.Navigate("https://sam.ui/index.html");
+                Log.Write("WebView2 init timing: folder=" + folderMs + " env=" + (envMs - folderMs) +
+                    " core=" + (coreMs - envMs) + " script=" + (scriptMs - coreMs) +
+                    " navigate=" + (initClock.ElapsedMilliseconds - scriptMs));
                 Log.Write("WebView2 navigated to virtual host (" + this._uiDirectory + ")");
             }
             catch (Exception error)
@@ -267,6 +287,13 @@ namespace SAM.Modern
                 return;
             }
 
+            // 回游戏库时，如果本窗口是被游戏库窗口接力起来的，就直接把那个窗口唤回来：
+            // 它的句柄、WebView2、已经渲染好的列表都还在，比新起一个进程快一个数量级。
+            if (appId <= 0 && this.TryResumeParent())
+            {
+                return;
+            }
+
             // %TEMP% / %LOCALAPPDATA% 在本机对被调起的进程不可写，握手文件必须放在程序目录下。
             string ready = ReadyFilePath();
 
@@ -276,14 +303,19 @@ namespace SAM.Modern
             bool maximized = this.WindowState == FormWindowState.Maximized;
             if (bounds.Width < 320 || bounds.Height < 240) bounds = Rectangle.Empty;
 
+            // 游戏库窗口去开游戏时把自己的 PID 传给子进程：子进程返回时据此唤回本窗口。
+            int parentPid = (appId > 0 && this.KeepAliveOnRelay)
+                ? System.Diagnostics.Process.GetCurrentProcess().Id
+                : 0;
+
             try
             {
                 var info = new System.Diagnostics.ProcessStartInfo();
                 info.FileName = Application.ExecutablePath;
                 info.UseShellExecute = false;
-                info.Arguments = Relay.BuildArguments(appId, ready, bounds, maximized);
+                info.Arguments = Relay.BuildArguments(appId, ready, bounds, maximized, parentPid);
                 this._relayChild = System.Diagnostics.Process.Start(info);
-                Log.Write("relay launch appId=" + appId + " pid=" + (this._relayChild == null ? 0 : this._relayChild.Id) + " args=" + info.Arguments);
+                Log.Write("relay launch appId=" + appId + " pid=" + (this._relayChild == null ? 0 : this._relayChild.Id) + " parent=" + parentPid + " args=" + info.Arguments);
             }
             catch (Exception error)
             {
@@ -299,6 +331,27 @@ namespace SAM.Modern
         private Timer _relayTimer;
         private DateTime _relayDeadline;
         private System.Diagnostics.Process _relayChild;
+        private string _relayReadyFile;
+
+        /// <summary>
+        /// 接力后本窗口是否继续活着（游戏库窗口隐藏待命，等子窗口唤回）。
+        /// 只有游戏库窗口会返回 true：它的状态全在内存里，唤回比重建便宜得多。
+        /// </summary>
+        protected virtual bool KeepAliveOnRelay { get { return false; } }
+
+        /// <summary>由父窗口通过 --parent-pid 传入的游戏库进程 PID（0 表示没有父窗口）。</summary>
+        public static int ParentPid;
+
+        private Timer _parentWatchTimer;
+        private bool _standby;
+        private System.Diagnostics.Process _standbyChild;
+
+        private Timer _resumeTimer;
+        private DateTime _resumeDeadline;
+        private string _resumeFilePath;
+        private string _resumeAckPath;
+        private bool _resumeTried;
+        private bool _handedOffToParent;
 
         /// <summary>父子进程握手文件路径：位于程序目录下的 relay 子目录（保证双方都可读写）。</summary>
         private static string ReadyFilePath()
@@ -321,12 +374,14 @@ namespace SAM.Modern
 
         private void StartRelayWatch(string readyFile)
         {
+            this._relayReadyFile = readyFile;
             this._relayDeadline = DateTime.UtcNow.AddSeconds(25);
             if (this._relayTimer == null)
             {
                 this._relayTimer = new Timer();
-                this._relayTimer.Interval = 60;
-                this._relayTimer.Tick += delegate { this.PollRelay(readyFile); };
+                this._relayTimer.Interval = 15;
+                // Timer 只建一次，路径必须从字段读，否则第二次接力会去轮询上一轮的文件。
+                this._relayTimer.Tick += delegate { this.PollRelay(this._relayReadyFile); };
             }
             this._relayTimer.Start();
         }
@@ -342,10 +397,34 @@ namespace SAM.Modern
                 this._relayTimer.Stop();
                 try { File.Delete(readyFile); }
                 catch (Exception) { }
-                Log.Write("relay ready, closing old window");
+                this._standbyChild = this._relayChild;
                 this._relayChild = null;
+                if (this.KeepAliveOnRelay)
+                {
+                    this.EnterStandby();
+                    return;
+                }
+                Log.Write("relay ready, closing old window");
                 this.Close();
                 return;
+            }
+
+            if (this._relayChild != null)
+            {
+                bool exited = false;
+                try { exited = this._relayChild.HasExited; }
+                catch (Exception) { exited = true; }
+
+                if (exited)
+                {
+                    // 新窗口还没报到就没了（初始化失败 / 用户提前关掉）：别干等 25 秒。
+                    this._relayTimer.Stop();
+                    this._relayChild = null;
+                    Log.Write("relay child exited before ready");
+                    this.Channel.Status("切换失败。", false);
+                    this.Channel.Toast("error", "切换失败", "新窗口在就绪前退出了，已保留当前界面。");
+                    return;
+                }
             }
 
             if (DateTime.UtcNow > this._relayDeadline)
@@ -363,14 +442,257 @@ namespace SAM.Modern
             }
         }
 
-        /// <summary>页面就绪后写文件通知父窗口（用于父子窗口无缝切换）。</summary>
-        private void WriteReadyFile()
+        /// <summary>
+        /// 接力成功后本窗口进入待命：藏起来但进程活着，等游戏窗口要回游戏库时再被唤回。
+        /// 隐藏而不是关闭，是因为重建一次窗口（进程启动 + Steam 初始化 + WebView2 + 页面渲染）要 870ms 量级，
+        /// 而把已有窗口 Show 出来只要几十毫秒。
+        /// </summary>
+        private void EnterStandby()
         {
-            if (string.IsNullOrEmpty(ReadyFile)) return;
-            this.RevealWindow();
+            this._standby = true;
+            Log.Write("standby: hiding picker window, child pid=" + (this._standbyChild == null ? 0 : this._standbyChild.Id));
+
+            try { this.Hide(); }
+            catch (Exception error) { Log.Write("standby hide failed", error); }
+
+            if (this._parentWatchTimer == null)
+            {
+                this._parentWatchTimer = new Timer();
+                this._parentWatchTimer.Interval = 20;
+                this._parentWatchTimer.Tick += delegate { this.PollStandby(); };
+            }
+            this._parentWatchTimer.Start();
+        }
+
+        /// <summary>待命期间轮询两件事：子窗口要求唤回（正常），子窗口已经退出（异常，得自己回来）。</summary>
+        private void PollStandby()
+        {
+            if (this._standby == false)
+            {
+                this._parentWatchTimer.Stop();
+                return;
+            }
+
+            string resume = Relay.ResumeFilePath(System.Diagnostics.Process.GetCurrentProcess().Id);
+            bool requested = false;
+            try { requested = File.Exists(resume); }
+            catch (Exception) { }
+
+            if (requested)
+            {
+                Rectangle bounds = Rectangle.Empty;
+                bool maximized = false;
+                bool quit = false;
+                try
+                {
+                    string text = File.ReadAllText(resume);
+                    quit = string.Equals(text.Trim(), "quit", StringComparison.OrdinalIgnoreCase);
+                    if (quit == false) ParseResumeRequest(text, out bounds, out maximized);
+                    File.Delete(resume);
+                }
+                catch (Exception error)
+                {
+                    Log.Write("resume read failed", error);
+                }
+
+                if (quit)
+                {
+                    // 用户在游戏窗口点了关闭：整个程序一起退出，别把游戏库窗口单独冒出来。
+                    Log.Write("standby: child closed, exiting");
+                    this._standby = false;
+                    this._standbyChild = null;
+                    this._parentWatchTimer.Stop();
+                    this.Close();
+                    return;
+                }
+
+                Log.Write("standby: resumed by child, bounds=" + bounds + " max=" + maximized);
+                this._standbyChild = null;
+                this.ExitStandby(bounds, maximized);
+
+                try
+                {
+                    string ack = resume + ".ack";
+                    File.WriteAllText(ack, "ok");
+                }
+                catch (Exception error)
+                {
+                    Log.Write("resume ack failed", error);
+                }
+                return;
+            }
+
+            if (this._standbyChild != null)
+            {
+                bool exited = false;
+                try { exited = this._standbyChild.HasExited; }
+                catch (Exception) { exited = true; }
+
+                if (exited)
+                {
+                    // 子窗口没走唤回流程就没了（崩溃或被任务管理器结束）：自己出来，别让用户面对空桌面。
+                    Log.Write("standby: child exited without resume, showing picker again");
+                    this._standbyChild = null;
+                    this.ExitStandby(Rectangle.Empty, false);
+                }
+            }
+        }
+
+        /// <summary>把待命的窗口重新摆出来。</summary>
+        private void ExitStandby(Rectangle bounds, bool maximized)
+        {
+            this._standby = false;
+            if (this._parentWatchTimer != null) this._parentWatchTimer.Stop();
+
             try
             {
-                File.WriteAllText(ReadyFile, "ready");
+                if (bounds.IsEmpty == false && bounds.Width >= 320 && bounds.Height >= 240)
+                {
+                    this.StartPosition = FormStartPosition.Manual;
+                    this.Bounds = bounds;
+                }
+                this.Show();
+                if (maximized) this.WindowState = FormWindowState.Maximized;
+                this.Activate();
+                this.BringToFront();
+                this.ApplyRoundedRegion();
+                this.OnResumed();
+            }
+            catch (Exception error)
+            {
+                Log.Write("standby exit failed", error);
+            }
+        }
+
+        /// <summary>窗口从待命状态被唤回后调用：子类可以在这里恢复界面上的状态文案。</summary>
+        protected virtual void OnResumed() { }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            // 用户直接关掉了游戏窗口（不是返回游戏库）：让待命的游戏库窗口一起退出。
+            // 否则游戏库窗口会因为「子进程没了」的兜底逻辑自己冒出来，用户会觉得关不掉。
+            if (ParentPid > 0 && this._handedOffToParent == false)
+            {
+                try
+                {
+                    File.WriteAllText(Relay.ResumeFilePath(ParentPid), "quit");
+                    Log.Write("quit parent pid=" + ParentPid);
+                }
+                catch (Exception error)
+                {
+                    Log.Write("quit parent failed", error);
+                }
+            }
+            base.OnFormClosed(e);
+        }
+
+        private static void ParseResumeRequest(string text, out Rectangle bounds, out bool maximized)
+        {
+            bounds = Rectangle.Empty;
+            maximized = false;
+            if (string.IsNullOrEmpty(text)) return;
+
+            string[] parts = text.Trim().Split('|');
+            if (parts.Length > 1 && string.Equals(parts[1], "max", StringComparison.OrdinalIgnoreCase)) maximized = true;
+
+            Rectangle parsed;
+            if (Relay.TryParseBounds(parts[0], out parsed)) bounds = parsed;
+        }
+
+        /// <summary>
+        /// 本窗口是被游戏库窗口接力起来的：写唤回文件，让那个窗口自己回来，然后关掉自己。
+        /// 返回 true 表示已经交给父窗口，调用方不要再启动新进程。
+        /// </summary>
+        private bool TryResumeParent()
+        {
+            if (ParentPid <= 0 || this._resumeTried) return false;
+            this._resumeTried = true;
+
+            string path = Relay.ResumeFilePath(ParentPid);
+            Rectangle bounds = this.WindowState == FormWindowState.Maximized ? this.RestoreBounds : this.Bounds;
+            bool maximized = this.WindowState == FormWindowState.Maximized;
+            if (bounds.Width < 320 || bounds.Height < 240) bounds = Rectangle.Empty;
+
+            string text = bounds.IsEmpty
+                ? "0,0,0,0" + (maximized ? "|max" : string.Empty)
+                : bounds.X + "," + bounds.Y + "," + bounds.Width + "," + bounds.Height + (maximized ? "|max" : string.Empty);
+
+            try
+            {
+                File.WriteAllText(path, text);
+                Log.Write("resume parent pid=" + ParentPid + " request=" + text);
+            }
+            catch (Exception error)
+            {
+                Log.Write("resume request failed", error);
+                return false;
+            }
+
+            this._handedOffToParent = true;
+            this.Channel.Status("正在返回游戏库…", true);
+            this._resumeFilePath = path;
+            this._resumeAckPath = path + ".ack";
+            this._resumeDeadline = DateTime.UtcNow.AddSeconds(8);
+
+            if (this._resumeTimer == null)
+            {
+                this._resumeTimer = new Timer();
+                this._resumeTimer.Interval = 15;
+                this._resumeTimer.Tick += delegate { this.PollResumeAck(); };
+            }
+            this._resumeTimer.Start();
+            return true;
+        }
+
+        private void PollResumeAck()
+        {
+            bool acked = false;
+            try { acked = File.Exists(this._resumeAckPath); }
+            catch (Exception) { }
+
+            if (acked)
+            {
+                this._resumeTimer.Stop();
+                try { File.Delete(this._resumeAckPath); } catch (Exception) { }
+                Log.Write("parent resumed, closing game window");
+                this.Close();
+                return;
+            }
+
+            if (DateTime.UtcNow > this._resumeDeadline)
+            {
+                this._resumeTimer.Stop();
+                Log.Write("parent resume timeout, falling back to new picker process");
+                try { File.Delete(this._resumeFilePath); } catch (Exception) { }
+                // 父窗口叫不醒：让它自己退场，免得两个游戏库窗口同时存在。
+                try { File.WriteAllText(Relay.ResumeFilePath(ParentPid), "quit"); } catch (Exception) { }
+                // 父窗口没响应（被杀 / 卡死）：退回原来的做法，起一个新的游戏库进程。
+                this.RelayTo(0);
+            }
+        }
+
+        private bool _readyAnnounced;
+
+        /// <summary>
+        /// 显示窗口并通知父窗口退出。幂等：多次调用只有第一次生效。
+        /// 时机在页面 load 之后、C# 侧推数据之前 —— 页面此时已经有骨架屏，
+        /// 先把窗口摆上来、让旧窗口退场，数据随后补进去，比等数据齐了再显示快得多。
+        /// </summary>
+        private void MarkReady()
+        {
+            if (this._readyAnnounced) return;
+            this._readyAnnounced = true;
+
+            this.RevealWindow();
+
+            if (string.IsNullOrEmpty(ReadyFile)) return;
+            try
+            {
+                // 先写临时文件再改名：父进程靠 File.Exists 判断，改名保证它看到的一定是完整文件。
+                string temp = ReadyFile + ".tmp";
+                File.WriteAllText(temp, "ready");
+                if (File.Exists(ReadyFile)) File.Delete(ReadyFile);
+                File.Move(temp, ReadyFile);
                 Log.Write("ready file written: " + ReadyFile);
             }
             catch (Exception error)
@@ -457,7 +779,65 @@ namespace SAM.Modern
             throw new IOException("找不到可写的 WebView2 用户数据目录。");
         }
 
-        private async void OnNavigationCompleted(object sender, CoreWebView2NavigationCompletedEventArgs e)
+        private bool _pageReadyDone;
+        private bool _paintedSeen;
+        private System.Windows.Forms.Timer _paintTimer;
+
+        /// <summary>
+        /// 页面可以接收消息了：推积压消息 → 让子类推首屏数据。
+        /// 幂等，两个信号源谁先到谁负责：
+        ///   - 页面自己 postMessage 的 ui/ready（最早，比 NavigationCompleted 早 100ms 量级）
+        ///   - CoreWebView2.NavigationCompleted（兜底，ui/ready 万一没发出来）
+        /// 这里不亮窗口：亮窗口要等页面把首屏真正画出来（ui/painted），
+        /// 否则新窗口会先露出 boot() 的空骨架，切换时看到的就是「库骨架屏一闪」。
+        /// </summary>
+        private void CompletePageReady()
+        {
+            if (this._pageReadyDone) return;
+            this._pageReadyDone = true;
+            this._webReady = true;
+
+            this.Bridge.Flush();
+            this.OnPageReady();
+            this.StartPaintWatch();
+        }
+
+        /// <summary>
+        /// 等页面回 ui/painted 再亮窗口；最多等 PaintTimeoutMs 毫秒，
+        /// 免得脚本出错时窗口永远停在屏幕外。
+        /// </summary>
+        private void StartPaintWatch()
+        {
+            if (this._paintedSeen || this._paintTimer != null) return;
+            this._paintTimer = new System.Windows.Forms.Timer();
+            this._paintTimer.Interval = PaintTimeoutMs;
+            this._paintTimer.Tick += delegate
+            {
+                this._paintTimer.Stop();
+                this._paintTimer.Dispose();
+                this._paintTimer = null;
+                if (this._paintedSeen) return;
+                Log.Write("ui/painted timeout, revealing anyway");
+                this.MarkReady();
+            };
+            this._paintTimer.Start();
+        }
+
+        private const int PaintTimeoutMs = 1200;
+
+        private void OnPainted()
+        {
+            this._paintedSeen = true;
+            if (this._paintTimer != null)
+            {
+                this._paintTimer.Stop();
+                this._paintTimer.Dispose();
+                this._paintTimer = null;
+            }
+            this.MarkReady();
+        }
+
+        private void OnNavigationCompleted(object sender, CoreWebView2NavigationCompletedEventArgs e)
         {
             if (e.IsSuccess == false)
             {
@@ -465,12 +845,7 @@ namespace SAM.Modern
                 return;
             }
 
-            this._webReady = true;
-            await this.Web.CoreWebView2.ExecuteScriptAsync(
-                "if (window.SAM && window.SAM.handleEvent) { window.SAM.ready = true; }");
-            this.Bridge.Flush();
-            this.OnPageReady();
-            this.WriteReadyFile();
+            this.CompletePageReady();
 
             if (string.IsNullOrEmpty(ShotPath) == false)
             {
@@ -542,6 +917,15 @@ namespace SAM.Modern
             if (string.Equals(cmd, "ui/ready", StringComparison.Ordinal))
             {
                 Log.Write("ui reported ready");
+                // 页面 load 事件比 NavigationCompleted 早 100ms 量级，是更好的就绪信号。
+                this.CompletePageReady();
+                return;
+            }
+            if (string.Equals(cmd, "ui/painted", StringComparison.Ordinal))
+            {
+                Log.Write("ui reported painted (layout=" + JsonParser.GetNumber(message, "layoutMs") +
+                    "ms image=" + JsonParser.GetNumber(message, "imageMs") + "ms)");
+                this.OnPainted();
                 return;
             }
 
