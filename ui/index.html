@@ -9,12 +9,6 @@
 </head>
 <body data-mode="picker">
 
-<div class="bg" aria-hidden="true">
-  <span class="bg__blob bg__blob--1"></span>
-  <span class="bg__blob bg__blob--2"></span>
-  <span class="bg__grid"></span>
-</div>
-
 <div class="app" id="app">
 
   <header class="titlebar" id="titlebar">
@@ -55,24 +49,23 @@
   </header>
 
   <div class="toolbar">
-
     <div class="toolbar__row" id="tbPicker">
-      <label class="search">
-        <svg class="search__icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
-          <circle cx="8.8" cy="8.8" r="5.4" /><path d="M12.9 12.9 16.6 16.6" />
+      <label class="search" for="pickerSearch">
+        <svg class="search__icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+          <circle cx="7" cy="7" r="4.4" /><path d="M10.4 10.4 14 14" />
         </svg>
-        <input class="search__input" id="pickerSearch" type="text" placeholder="搜索游戏名称…" autocomplete="off" spellcheck="false" aria-label="搜索游戏名称" />
-        <button type="button" class="search__clear" id="pickerSearchClear" aria-label="清空搜索" hidden>
-          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M3.2 3.2 8.8 8.8M8.8 3.2 3.2 8.8" /></svg>
+        <input class="search__input" id="pickerSearch" type="text" placeholder="搜索游戏名称…" autocomplete="off" spellcheck="false" />
+        <button type="button" class="search__clear" id="pickerSearchClear" title="清空" aria-label="清空" hidden>
+          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M3.4 3.4 8.6 8.6M8.6 3.4 3.4 8.6" /></svg>
         </button>
       </label>
 
-      <div class="seg" id="pickerTypeSeg" role="group" aria-label="游戏类型筛选">
-        <button type="button" class="seg__item is-active" data-type="all">全部</button>
-        <button type="button" class="seg__item" data-type="normal">正式版</button>
-        <button type="button" class="seg__item" data-type="demo">试玩</button>
-        <button type="button" class="seg__item" data-type="mod">模组</button>
-        <button type="button" class="seg__item" data-type="junk">其他</button>
+      <div class="seg" id="pickerTypeSeg" role="group" aria-label="游戏类型">
+        <button type="button" class="seg__item is-active" data-type="all" aria-pressed="true">全部</button>
+        <button type="button" class="seg__item" data-type="normal" aria-pressed="false">正式版</button>
+        <button type="button" class="seg__item" data-type="demo" aria-pressed="false">试玩</button>
+        <button type="button" class="seg__item" data-type="mod" aria-pressed="false">模组</button>
+        <button type="button" class="seg__item" data-type="junk" aria-pressed="false">其他</button>
       </div>
 
       <div class="toolbar__spacer"></div>
@@ -86,71 +79,28 @@
     </div>
 
     <div class="toolbar__row" id="tbGame" hidden>
-      <button type="button" class="btn btn--back" id="btnBack" title="返回游戏库（Esc 也可返回）">
-        <svg class="btn__ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M15.4 10H4.8" /><path d="M9.2 5.2 4.4 10l4.8 4.8" />
+      <button type="button" class="btn btn--ghost" id="btnBack" title="返回游戏库（Esc 也可返回）">
+        <svg class="btn__ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M11.6 4.4 6 10l5.6 5.6" />
         </svg>
         <span>游戏库</span>
       </button>
-      <button type="button" class="btn btn--accent" id="btnRandom" title="按随机间隔逐个解锁成就，每个成就得到不同的解锁时间">
-        <svg class="btn__ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M3.8 6.4h3.4l5.6 7.2h3.4" /><path d="M13.6 3.6 16.4 6.4l-2.8 2.8" />
-          <path d="M3.8 13.6h3.4l1.5-1.9" /><path d="M13.6 10.8l2.8 2.8-2.8 2.8" />
+
+      <button type="button" class="btn btn--accent" id="btnRandom" title="按随机间隔逐个解锁成就，模拟真实游戏节奏">
+        <svg class="btn__ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M4 5.6h3.2l5.6 8.8H16" /><path d="M13.4 12.2 16 14.4l-2.6 2.2" /><path d="M4 14.4h3.2l1.9-3" /><path d="M12.1 8.2 13.4 6.4H16" />
         </svg>
         <span class="btn__label" id="randomLabel">随机时间解锁</span>
       </button>
-      <span class="toolbar__divider" aria-hidden="true"></span>
-
-      <div class="seg seg--tabs" id="gameTabs" role="tablist" aria-label="数据类别">
-        <button type="button" class="seg__item is-active" data-tab="achievements" role="tab" aria-selected="true">成就</button>
-        <button type="button" class="seg__item" data-tab="stats" role="tab" aria-selected="false">统计</button>
-      </div>
-
-      <label class="search" id="achSearchWrap">
-        <svg class="search__icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
-          <circle cx="8.8" cy="8.8" r="5.4" /><path d="M12.9 12.9 16.6 16.6" />
-        </svg>
-        <input class="search__input" id="achSearch" type="text" placeholder="搜索成就…" autocomplete="off" spellcheck="false" aria-label="搜索成就" />
-        <button type="button" class="search__clear" id="achSearchClear" aria-label="清空搜索" hidden>
-          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M3.2 3.2 8.8 8.8M8.8 3.2 3.2 8.8" /></svg>
-        </button>
-      </label>
-
-      <div class="seg" id="achFilterSeg" role="group" aria-label="成就状态筛选">
-        <button type="button" class="seg__item is-active" data-filter="all">全部</button>
-        <button type="button" class="seg__item" data-filter="unlocked">已解锁</button>
-        <button type="button" class="seg__item" data-filter="locked">未解锁</button>
-        <button type="button" class="seg__item seg__item--rare" data-filter="rare">稀有</button>
-      </div>
 
       <div class="toolbar__spacer"></div>
 
-      <div class="toolbar__actions" id="achActions">
-        <button type="button" class="btn btn--ghost btn--icon" data-act="unlockAll" title="全部标记为解锁（本地暂存，需保存）" aria-label="全部标记为解锁">
-          <svg class="btn__ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M3.4 10.6 6.6 13.6 12.4 6.6" /><path d="M9.6 12.2 12.2 14.6 18 6.6" />
-          </svg>
-        </button>
-        <button type="button" class="btn btn--ghost btn--icon" data-act="invertAll" title="翻转全部成就的解锁状态（本地暂存，需保存）" aria-label="翻转全部成就的解锁状态">
-          <svg class="btn__ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M4.2 6.6h9.6" /><path d="M11.2 3.8 14 6.6l-2.8 2.8" />
-            <path d="M15.8 13.4H6.2" /><path d="M8.8 10.6 6 13.4l2.8 2.8" />
-          </svg>
-        </button>
-        <button type="button" class="btn btn--ghost btn--icon" data-act="lockAll" title="全部标记为未解锁（本地暂存，需保存）" aria-label="全部标记为未解锁">
-          <svg class="btn__ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <rect x="4.6" y="9" width="10.8" height="7.4" rx="2" /><path d="M7.2 9V6.6a2.8 2.8 0 0 1 5.6 0V9" />
-          </svg>
-        </button>
-      </div>
-
       <button type="button" class="btn btn--primary" id="btnSave" disabled>
-        <span class="spinner" id="saveSpinner" hidden></span>
+        <span class="spinner spinner--sm" id="saveSpinner" hidden></span>
         <span class="btn__label" id="saveLabel">保存改动</span>
         <span class="badge" id="saveBadge" hidden>0</span>
       </button>
     </div>
-
   </div>
 
   <main class="stage">
@@ -161,14 +111,6 @@
       <div class="skel-grid" id="pickerSkeleton" aria-hidden="true"></div>
 
       <div class="empty" id="pickerEmpty" hidden>
-        <svg class="empty__art" viewBox="0 0 160 120" fill="none" aria-hidden="true">
-          <rect x="18" y="26" width="58" height="66" rx="8" stroke="rgba(255,255,255,.2)" stroke-width="1.4" />
-          <rect x="84" y="38" width="58" height="54" rx="8" stroke="rgba(10,132,255,.45)" stroke-width="1.4" />
-          <path d="M38 44h18M38 54h26M38 64h12" stroke="rgba(255,255,255,.2)" stroke-width="1.4" stroke-linecap="round" />
-          <path d="M100 56h26M100 66h16" stroke="rgba(255,255,255,.14)" stroke-width="1.4" stroke-linecap="round" />
-          <circle cx="128" cy="30" r="12" stroke="rgba(48,209,88,.5)" stroke-width="1.4" />
-          <path d="M123 30.5 126.6 34l5.6-6" stroke="rgba(48,209,88,.75)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
         <p class="empty__title" id="pickerEmptyTitle">还没有可管理的游戏</p>
         <p class="empty__text" id="pickerEmptyText">未在 Steam 库中找到任何游戏，试试重新扫描。</p>
       </div>
@@ -176,28 +118,19 @@
 
     <section class="view view--game" id="viewGame" aria-label="成就管理" hidden>
       <aside class="side" id="gameSide">
-        <div class="side__cover" id="sideCover"></div>
-        <h1 class="side__title" id="sideTitle">—</h1>
-        <div class="side__meta" id="sideMeta"></div>
+        <div class="side__scroll">
+          <div class="side__cover" id="sideCover"></div>
+          <h1 class="side__title" id="sideTitle">—</h1>
+          <div class="side__meta" id="sideMeta"></div>
 
-        <div class="ring-wrap">
-          <svg class="ring" viewBox="0 0 120 120" aria-hidden="true">
-            <defs>
-              <linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0%" stop-color="#4aa9ff" />
-                <stop offset="100%" stop-color="#0a84ff" />
-              </linearGradient>
-            </defs>
-            <circle class="ring__track" cx="60" cy="60" r="52" />
-            <circle class="ring__fill" id="ringFill" cx="60" cy="60" r="52" transform="rotate(-90 60 60)" />
-          </svg>
-          <div class="ring__center">
-            <div class="ring__num"><span id="ringUnlocked">0</span><span class="ring__slash">/</span><span id="ringTotal">0</span></div>
-            <div class="ring__pct" id="ringPct">0%</div>
+          <div class="progress">
+            <div class="progress__num"><span id="progUnlocked">0</span><span class="progress__slash">/</span><span id="progTotal">0</span></div>
+            <div class="progress__track" aria-hidden="true"><span class="progress__fill" id="progFill"></span></div>
+            <div class="progress__meta"><span id="progPct">0%</span><span class="progress__rest" id="progRest">剩余 0 项</span></div>
           </div>
-        </div>
 
-        <dl class="side__facts" id="sideFacts"></dl>
+          <dl class="side__facts" id="sideFacts"></dl>
+        </div>
 
         <div class="side__actions">
           <button type="button" class="btn btn--ghost btn--block" id="btnRefresh">
@@ -216,6 +149,50 @@
       </aside>
 
       <div class="panel">
+        <div class="content-head">
+          <div class="seg seg--tabs" id="gameTabs" role="tablist" aria-label="内容切换">
+            <button type="button" class="seg__item is-active" data-tab="achievements" role="tab" aria-selected="true">成就</button>
+            <button type="button" class="seg__item" data-tab="stats" role="tab" aria-selected="false">统计</button>
+          </div>
+
+          <label class="search search--inline" id="achSearchWrap" for="achSearch">
+            <svg class="search__icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+              <circle cx="7" cy="7" r="4.4" /><path d="M10.4 10.4 14 14" />
+            </svg>
+            <input class="search__input" id="achSearch" type="text" placeholder="搜索成就…" autocomplete="off" spellcheck="false" />
+            <button type="button" class="search__clear" id="achSearchClear" title="清空" aria-label="清空" hidden>
+              <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M3.4 3.4 8.6 8.6M8.6 3.4 3.4 8.6" /></svg>
+            </button>
+          </label>
+
+          <div class="seg" id="achFilterSeg" role="group" aria-label="成就筛选">
+            <button type="button" class="seg__item is-active" data-filter="all" aria-pressed="true">全部</button>
+            <button type="button" class="seg__item" data-filter="unlocked" aria-pressed="false">已解锁</button>
+            <button type="button" class="seg__item" data-filter="locked" aria-pressed="false">未解锁</button>
+            <button type="button" class="seg__item" data-filter="rare" aria-pressed="false">稀有</button>
+          </div>
+
+          <div class="content-head__spacer"></div>
+
+          <div class="actions" id="achActions">
+            <button type="button" class="btn btn--ghost btn--icon" data-act="unlockAll" title="全部解锁" aria-label="全部解锁">
+              <svg class="btn__ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M3.6 10.6 7 14l4.4-5" /><path d="M9.4 10.6 12.8 14l4.4-5" />
+              </svg>
+            </button>
+            <button type="button" class="btn btn--ghost btn--icon" data-act="invertAll" title="反转解锁状态" aria-label="反转解锁状态">
+              <svg class="btn__ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M4 6.4h8.6l-2-2" /><path d="M16 13.6H7.4l2 2" />
+              </svg>
+            </button>
+            <button type="button" class="btn btn--ghost btn--icon" data-act="lockAll" title="全部锁定" aria-label="全部锁定">
+              <svg class="btn__ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="5.2" y="9" width="9.6" height="7" rx="1.6" /><path d="M7.4 9V7.2a2.6 2.6 0 0 1 5.2 0V9" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
         <div class="panel__body" id="panelBody">
 
           <div class="unlock-bar" id="unlockBar" hidden>
@@ -227,14 +204,9 @@
             <button type="button" class="btn btn--ghost btn--sm" id="btnUnlockStop">停止</button>
           </div>
 
-          <div class="ach-grid" id="achGrid"></div>
+          <div class="ach-list" id="achGrid"></div>
 
           <div class="empty empty--tight" id="achEmpty" hidden>
-            <svg class="empty__art empty__art--sm" viewBox="0 0 120 96" fill="none" aria-hidden="true">
-              <circle cx="52" cy="44" r="22" stroke="rgba(255,255,255,.2)" stroke-width="1.5" />
-              <path d="M68 60.5 84 76" stroke="rgba(10,132,255,.5)" stroke-width="2.2" stroke-linecap="round" />
-              <path d="M42 44h20M42 51h12" stroke="rgba(255,255,255,.14)" stroke-width="1.4" stroke-linecap="round" />
-            </svg>
             <p class="empty__title" id="achEmptyTitle">没有匹配的成就</p>
             <p class="empty__text" id="achEmptyText">换个关键词或切换筛选条件试试。</p>
           </div>

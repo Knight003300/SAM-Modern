@@ -33,7 +33,6 @@
     { label: '稀有 < 5%', pct: 5 },
     { label: '稀有 < 10%', pct: 10 }
   ];
-  var RING_C = 2 * Math.PI * 52;
 
   /* ---------------------------------------------------------------------------
      2. 单一数据源
@@ -158,10 +157,9 @@
     };
   }
 
+  // 占位图标/封面上的缩写：单色，不用渐变（渐变文字既装饰又降低对比度）
   function monoStyle(size) {
-    return 'font-size:' + size + 'px;font-weight:800;letter-spacing:-1.5px;line-height:1;' +
-      'background:linear-gradient(160deg,#4aa9ff,#0a84ff);-webkit-background-clip:text;' +
-      'background-clip:text;color:transparent;opacity:.92;';
+    return 'font-size:' + size + 'px;font-weight:600;letter-spacing:.02em;line-height:1;color:var(--text-3);';
   }
 
   function fallbackIcon(text) {
@@ -795,16 +793,17 @@
   function gameCardHtml(g, index) {
     var mono = monogram(g.name);
     var hue = hash32('' + g.id) % 300;
-    var delay = Math.min(index * 8, 120);
     var out = [];
     out.push('<button type="button" class="game-card" data-id="' + esc(g.id) + '"');
-    out.push(' style="animation-delay:' + delay + 'ms"');
     out.push(' title="' + esc(g.name) + '">');
     out.push('<span class="game-card__cover" data-mono="' + esc(mono) + '">');
     var cover = coverImgHtml(g, true);
     out.push(cover || fallbackCover(mono, hue));
     out.push('</span>');
-    out.push('<span class="game-card__tags">' + typeTagHtml(g.type) + '</span>');
+    // 正式版占绝大多数，逐张标注等于没标；只有例外（试玩/模组/其他）才显示标签。
+    out.push(g.type && g.type !== 'normal'
+      ? '<span class="game-card__tags">' + typeTagHtml(g.type) + '</span>'
+      : '');
     out.push('<span class="game-card__name">' + esc(g.name) + '</span>');
     out.push('<span class="game-card__hover"></span>');
     out.push('</button>');
@@ -911,27 +910,25 @@
     if (a.hidden) {
       out.push('<span class="tag tag--hidden">隐藏</span>');
     }
-    if (out.length === 0) {
-      out.push('<span class="tag">未解锁</span>');
-    }
+    // 不再给每个未解锁成就补一个「未解锁」标签：365 行都写同一句是纯噪音，
+    // 未解锁本身由「名字降一级 + 无勾」表达。
     return out.join('');
   }
 
+  // 一行一个成就：图标 | 名称+描述 | 标签 | 勾选。用 grid-template-areas 直接排版，
+  // 不再包一层 .ach__body（包裹层会打断 grid 区域布局）。无入场动画：长列表错峰
+  // 会让人等，且和首帧分块渲染叠加成两次视觉跳动。
   function achCardHtml(a, index) {
     var on = desiredAch(a);
     var classes = 'ach ' + (on ? 'is-on' : 'is-locked');
     var desc = (a.hidden && !on) ? '隐藏成就：解锁前无法查看描述。' : (a.desc || '暂无描述');
-    var delay = Math.min(index * 14, 260);
     var out = [];
     out.push('<button type="button" class="' + classes + '" data-id="' + esc(a.id) + '"');
-    out.push(' style="animation-delay:' + delay + 'ms"');
     out.push(' aria-pressed="' + (on ? 'true' : 'false') + '">');
     out.push('<span class="ach__icon">' + achIconHtml(a, on) + '</span>');
-    out.push('<span class="ach__body">');
     out.push('<span class="ach__name" title="' + esc(a.name) + '">' + esc(a.name) + '</span>');
     out.push('<span class="ach__desc" title="' + esc(desc) + '">' + esc(desc) + '</span>');
     out.push('<span class="ach__foot">' + achTagsHtml(a, on) + '</span>');
-    out.push('</span>');
     out.push('<span class="ach__check">' + SVG_CHECK + '</span>');
     out.push('</button>');
     return out.join('');
@@ -1006,11 +1003,11 @@
     var p = progressInfo();
     var ratio = p.total > 0 ? p.unlocked / p.total : 0;
     var pct = ratio * 100;
-    els.ringUnlocked.textContent = String(p.unlocked);
-    els.ringTotal.textContent = String(p.total);
-    els.ringPct.textContent = (pct % 1 === 0 ? String(Math.round(pct)) : pct.toFixed(1)) + '%';
-    els.ringFill.setAttribute('stroke-dasharray', RING_C + ' ' + RING_C);
-    els.ringFill.setAttribute('stroke-dashoffset', String(RING_C * (1 - ratio)));
+    els.progUnlocked.textContent = String(p.unlocked);
+    els.progTotal.textContent = String(p.total);
+    els.progPct.textContent = (pct % 1 === 0 ? String(Math.round(pct)) : pct.toFixed(1)) + '%';
+    els.progRest.textContent = '剩余 ' + (p.total - p.unlocked) + ' 项';
+    els.progFill.style.width = (ratio * 100) + '%';
 
     var d = dirtyCount();
     els.sideFacts.innerHTML = [
@@ -1169,18 +1166,19 @@
     el.setAttribute('aria-modal', 'true');
 
     var parts = [];
-    parts.push('<div class="modal__head">');
-    parts.push('<span class="modal__ico' + (danger ? '' : ' modal__ico--info') + '">' +
+    var body = [];
+    body.push('<div class="modal__head">');
+    body.push('<span class="modal__ico' + (danger ? ' modal__ico--danger' : ' modal__ico--info') + '">' +
       (danger ? ICON.warn : ICON.info) + '</span>');
-    parts.push('<h2 class="modal__title">' + esc(o.title || '提示') + '</h2>');
-    parts.push('</div>');
-    if (o.text) parts.push('<p class="modal__text">' + esc(o.text) + '</p>');
+    body.push('<h2 class="modal__title">' + esc(o.title || '提示') + '</h2>');
+    body.push('</div>');
+    if (o.text) body.push('<p class="modal__text">' + esc(o.text) + '</p>');
     if (o.checkboxLabel) {
-      parts.push('<label style="display:flex;align-items:center;gap:8px;font-size:12.5px;' +
-        'color:var(--text-2);cursor:pointer;user-select:none;">' +
-        '<input type="checkbox" id="samModalCheck" style="width:15px;height:15px;accent-color:var(--brand-1);cursor:pointer;" />' +
+      body.push('<label class="modal__check">' +
+        '<input type="checkbox" id="samModalCheck" />' +
         '<span>' + esc(o.checkboxLabel) + '</span></label>');
     }
+    parts.push('<div class="modal__body">' + body.join('') + '</div>');
     parts.push('<div class="modal__foot">');
     if (showCancel) {
       parts.push('<button type="button" class="btn btn--ghost" data-role="cancel">' +
@@ -1210,8 +1208,11 @@
     setHidden(els.modalRoot, false);
     modalState = { el: el, prevFocus: prevFocus };
 
+    // 焦点给弹窗本身而不是「确认」按钮：程序化聚焦会画出焦点环，
+    // 在破坏性操作的红色按钮上像一层发光描边。键盘用户 Tab 到按钮时仍有焦点环。
+    el.setAttribute('tabindex', '-1');
     window.setTimeout(function () {
-      if (okBtn && okBtn.focus) okBtn.focus();
+      try { el.focus({ preventScroll: true }); } catch (err) { /* 忽略 */ }
     }, 30);
   }
 
@@ -1501,19 +1502,20 @@
     var available = list.length;
     var sel = { count: 0, gap: 1, rare: 0 };
     var el = document.createElement('div');
-    el.className = 'modal';
+    el.className = 'modal modal--wide';
     el.setAttribute('role', 'dialog');
     el.setAttribute('aria-modal', 'true');
 
     var parts = [];
-    parts.push('<div class="modal__head">');
-    parts.push('<span class="modal__ico modal__ico--info">' + ICON.info + '</span>');
-    parts.push('<h2 class="modal__title">随机时间解锁</h2>');
-    parts.push('</div>');
+    var body = [];
+    body.push('<div class="modal__head">');
+    body.push('<span class="modal__ico modal__ico--info">' + ICON.info + '</span>');
+    body.push('<h2 class="modal__title">随机时间解锁</h2>');
+    body.push('</div>');
     var rarityKnown = list.some(function (a) { return a && typeof a.rarity === 'number' && a.rarity >= 0; });
     var rareCount = list.filter(isRare).length;
 
-    parts.push('<p class="modal__text">Steam 只认“解锁那一刻”的真实时间，不接受伪造的历史时间。' +
+    body.push('<p class="modal__text">Steam 只认“解锁那一刻”的真实时间，不接受伪造的历史时间。' +
       '所以这里按随机间隔逐个写入，每个成就自然拿到不同的解锁时间。' +
       '当前有 ' + available + ' 个可解锁成就' +
       (rarityKnown ? '，其中 ' + rareCount + ' 个全服解锁率低于 ' + RARE_PCT + '%' : '') +
@@ -1559,9 +1561,9 @@
 
     var counts = activeCounts();
 
-    parts.push(groupHtml('rare', '解锁范围', rareItems()));
-    parts.push(groupHtml('count', '解锁数量', counts));
-    parts.push(groupHtml('gap', '解锁间隔', RANDOM_GAPS));
+    body.push(groupHtml('rare', '解锁范围', rareItems()));
+    body.push(groupHtml('count', '解锁数量', counts));
+    body.push(groupHtml('gap', '解锁间隔', RANDOM_GAPS));
 
     // 自定义间隔：最短 / 最长各填 天、小时、分、秒 四个数字
     function gapRowHtml(cap, rolePrefix, seconds) {
@@ -1580,12 +1582,13 @@
       return h.join('');
     }
 
-    parts.push('<div class="gap-custom" data-role="customGap" hidden>');
-    parts.push(gapRowHtml('最短', 'gapMin', 30));
-    parts.push(gapRowHtml('最长', 'gapMax', 90));
-    parts.push('<p class="gap-custom__hint" data-role="gapHint"></p>');
-    parts.push('</div>');
+    body.push('<div class="gap-custom" data-role="customGap" hidden>');
+    body.push(gapRowHtml('最短', 'gapMin', 30));
+    body.push(gapRowHtml('最长', 'gapMax', 90));
+    body.push('<p class="gap-custom__hint" data-role="gapHint"></p>');
+    body.push('</div>');
 
+    parts.push('<div class="modal__body">' + body.join('') + '</div>');
     parts.push('<div class="modal__foot">');
     parts.push('<button type="button" class="btn btn--ghost" data-role="cancel">取消</button>');
     parts.push('<button type="button" class="btn btn--primary" data-role="ok">开始解锁</button>');
@@ -2178,10 +2181,11 @@
     els.sideTitle = document.getElementById('sideTitle');
     els.sideMeta = document.getElementById('sideMeta');
     els.sideFacts = document.getElementById('sideFacts');
-    els.ringFill = document.getElementById('ringFill');
-    els.ringUnlocked = document.getElementById('ringUnlocked');
-    els.ringTotal = document.getElementById('ringTotal');
-    els.ringPct = document.getElementById('ringPct');
+    els.progUnlocked = document.getElementById('progUnlocked');
+    els.progTotal = document.getElementById('progTotal');
+    els.progPct = document.getElementById('progPct');
+    els.progRest = document.getElementById('progRest');
+    els.progFill = document.getElementById('progFill');
     els.btnRefresh = document.getElementById('btnRefresh');
     els.btnReset = document.getElementById('btnReset');
     els.btnRandom = document.getElementById('btnRandom');
@@ -2563,7 +2567,7 @@
   }
 
   window.SAM = {
-    version: '1.4.0',
+    version: '1.5.0',
     handleEvent: handleEvent,
     mock: enterMock,
     getState: function () {
