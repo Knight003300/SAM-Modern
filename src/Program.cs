@@ -189,6 +189,11 @@ namespace SAM.Modern
                 Log.Write("FATAL form crash (appId=" + appId + ")", error);
                 throw;
             }
+            finally
+            {
+                // 主动释放管道，别让 Steam 把「这个 AppID 还有活跃管道」当成游戏仍在运行。
+                host.Dispose();
+            }
             Log.Write("main form closed, exiting");
         }
     }

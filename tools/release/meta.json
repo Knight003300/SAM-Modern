@@ -11,7 +11,7 @@
     "achievements"
   ],
   "homepage": "https://github.com/Knight003300/SAM-Modern",
-  "tag": "v1.3.0",
-  "releaseName": "SAM Modern v1.3.0 · 界面重做与性能优化",
-  "releaseBody": "v1.3.0 · 界面重做 + 性能优化。这一版没有加新功能，就是把观感收干净、把卡顿修掉。\n\n**下载 `SAM-Modern-zhCN.zip`，解压后双击 `SAM.Modern.exe` 即可运行**（免安装，需已安装并登录 Steam）。\n\n### 观感\n- 整体换成**克制的深色中性灰** + 单一系统蓝强调色（`#0a84ff`），去掉了彩色渐变、紫色光晕和渐变按钮\n- 圆角与控件高度整体收小（按钮 36→30px、搜索框 36→30px），卡片描边更细，接近 macOS 那种安静的感觉\n- 去掉卡片入场动画、渐入动画、背景漂移动画与闪烁骨架屏，只保留弹窗与视图切换的过渡\n\n### 性能\n- **修复游戏库扫描卡死**：原来 `cache\\games.xml` 超过 24 小时就必须联网重下，而下载用的 `WebClient` 没有超时，源站半死时会一直转圈。现在改成 stale-while-revalidate：旧缓存立刻可用，过期只在后台线程限时刷新（12 秒超时）\n- 去掉标题栏 / 工具栏 / 状态栏 / 卡片 / 侧栏 / 面板 / 弹窗上的 **9 处 `backdrop-filter`**，以及两团常驻的 `blur(90px)` 背景动画，改为静态单层背景；低配机器滚动明显更稳\n- 搜索框加 **120ms 防抖**（回车、清空仍然立即生效），逐字输入不再每敲一下就重建整个网格\n\n### 说明\n- 本项目是 [gibbed/SteamAchievementManager](https://github.com/gibbed/SteamAchievementManager) 的二次修改版，保留并直接复用上游 `SAM.API`，界面层全部重写。上游 zlib License。\n- 首次运行可能被 SmartScreen 拦一下（无信誉记录的新程序），点「更多信息 → 仍要运行」。\n- 只修改本地 Steam 用户数据，不上传、不联网写库。"
+  "tag": "v1.3.1",
+  "releaseName": "SAM Modern v1.3.1 · 返回游戏库即退出游戏",
+  "releaseBody": "v1.3.1 · 修一个体验上的小 bug：返回游戏库后，Steam 里那个游戏还显示「运行中」。\n\n**下载 `SAM-Modern-zhCN.zip`，解压后双击 `SAM.Modern.exe` 即可运行**（免安装，需已安装并登录 Steam）。\n\n### 修复\n- 点「返回游戏库」后，Steam 客户端里那个游戏会立刻恢复成未运行状态，不再一直挂着「运行中」。\n- 原因：本程序换游戏靠「进程接力」，子进程会继承父进程环境变量里的 `SteamAppId`；游戏库进程把 appId 传成 0，但 `SAM.API` 的 `Client.Initialize(0)` 只是「不设置」，并不会清掉继承来的值，于是游戏库窗口仍以旧 appId 连着 `steamclient.dll`，Steam 就认为那个游戏还在跑。\n- 现在 appId 为 0 时会显式清除 `SteamAppId`，并在窗口关闭时主动释放 Steam 管道（`host.Dispose()`）。\n\n### 说明\n- 本项目是 [gibbed/SteamAchievementManager](https://github.com/gibbed/SteamAchievementManager) 的二次修改版，保留并直接复用上游 `SAM.API`，界面层全部重写。上游 zlib License。\n- 首次运行可能被 SmartScreen 拦一下（无信誉记录的新程序），点「更多信息 → 仍要运行」。\n- 只修改本地 Steam 用户数据，不上传、不联网写库。"
 }

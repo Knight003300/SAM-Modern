@@ -15,9 +15,25 @@ namespace SAM.Modern
         public void Initialize(long appId)
         {
             this.AppId = appId;
+
+            // 返回游戏库时是「接力」出来的新进程：UseShellExecute=false 启动的子进程会继承父进程
+            // 设过的 SteamAppId 环境变量，steamclient 会继续以那个游戏的身份建立管道，于是 Steam
+            // 一直认为那个游戏还在运行（游戏库里的「运行中」不消失）。游戏库进程必须显式清掉它。
+            if (appId <= 0)
+            {
+                Environment.SetEnvironmentVariable("SteamAppId", null);
+            }
+
+            Log.Write("steam init appId=" + appId
+                + " env SteamAppId=" + (Environment.GetEnvironmentVariable("SteamAppId") ?? "<null>"));
+
             this._client.Initialize(appId);
             this.Initialized = true;
-            Log.Write("Steam client initialized for appId " + appId);
+
+            uint reported = 0;
+            try { reported = this._client.SteamUtils.GetAppId(); }
+            catch (Exception) { }
+            Log.Write("Steam client initialized for appId " + appId + " (steam reports appId " + reported + ")");
         }
 
         public void Pump()
