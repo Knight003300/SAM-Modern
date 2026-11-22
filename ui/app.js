@@ -1999,11 +1999,22 @@
     return two(hour) + ':' + two(minute);
   }
 
-  // 把「时 / 分」换算成下一次出现的绝对时刻：今天已经过了（或只剩不到 1 分钟）就顺延到明天。
-  function nextAt(hour, minute) {
+  function hhmmss(hour, minute, second) {
+    return hhmm(hour, minute) + ':' + two(second);
+  }
+
+  // 时刻显示：秒为 0 时省略（22:22 比 22:22:00 顺眼），非 0 才带秒。
+  function clockShort(date) {
+    return date.getSeconds() === 0
+      ? hhmm(date.getHours(), date.getMinutes())
+      : hhmmss(date.getHours(), date.getMinutes(), date.getSeconds());
+  }
+
+  // 把「时 / 分 / 秒」换算成下一次出现的绝对时刻：今天已经过了（或只剩不到 3 秒）就顺延到明天。
+  function nextAt(hour, minute, second) {
     var now = new Date();
-    var d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, minute, 0, 0);
-    if (d.getTime() <= now.getTime() + 60000) d = new Date(d.getTime() + 86400000);
+    var d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, minute, second || 0, 0);
+    if (d.getTime() <= now.getTime() + 3000) d = new Date(d.getTime() + 86400000);
     return d;
   }
 
@@ -2019,7 +2030,7 @@
   }
 
   function clockLabel(date) {
-    return two(date.getMonth() + 1) + '-' + two(date.getDate()) + ' ' + hhmm(date.getHours(), date.getMinutes());
+    return two(date.getMonth() + 1) + '-' + two(date.getDate()) + ' ' + clockShort(date);
   }
 
   function countdownText(date) {
@@ -2062,8 +2073,8 @@
     return RANDOM_GAPS.slice(0, 3);
   }
 
-  // 时刻输入行：时 / 分两个数字框 + 四个快捷时刻
-  function timeRowHtml(hour, minute) {
+  // 时刻输入行：时 / 分 / 秒三个数字框 + 四个快捷时刻
+  function timeRowHtml(hour, minute, second) {
     var h = ['<div class="sch-time">'];
     h.push('<span class="sch-time__cap">解锁时刻</span>');
     h.push('<label class="sch-time__field">');
@@ -2076,6 +2087,11 @@
       '" data-role="minute" aria-label="解锁时刻的分钟" />');
     h.push('<span class="gap-custom__suffix">分</span>');
     h.push('</label>');
+    h.push('<label class="sch-time__field">');
+    h.push('<input class="gap-custom__num" type="number" min="0" max="59" step="1" value="' + (second || 0) +
+      '" data-role="second" aria-label="解锁时刻的秒" />');
+    h.push('<span class="gap-custom__suffix">秒</span>');
+    h.push('</label>');
     h.push('</div>');
     h.push('<div class="sch-quick">');
     for (var i = 0; i < SCHEDULE_QUICK.length; i++) {
@@ -2087,14 +2103,17 @@
   }
 
   // 时刻输入的通用读数 + 收敛：输入框里允许随便打，算的时候夹到合法范围
-  function readClock(hourInput, minuteInput) {
+  function readClock(hourInput, minuteInput, secondInput) {
     var h = Math.floor(Number(hourInput && hourInput.value));
     var m = Math.floor(Number(minuteInput && minuteInput.value));
+    var s = Math.floor(Number(secondInput && secondInput.value));
     if (!isFinite(h)) h = 0;
     if (!isFinite(m)) m = 0;
+    if (!isFinite(s)) s = 0;
     h = Math.max(0, Math.min(23, h));
     m = Math.max(0, Math.min(59, m));
-    return { hour: h, minute: m };
+    s = Math.max(0, Math.min(59, s));
+    return { hour: h, minute: m, second: s };
   }
 
   /* ---------- 标题栏的定时任务入口 ---------- */
@@ -2114,8 +2133,8 @@
     setHidden(els.scheduleChip, false);
     if (els.scheduleChipText) {
       els.scheduleChipText.textContent = jobs.length === 1
-        ? dayLabel(d) + ' ' + hhmm(d.getHours(), d.getMinutes())
-        : jobs.length + ' 个定时 · ' + hhmm(d.getHours(), d.getMinutes());
+        ? dayLabel(d) + ' ' + clockShort(d)
+        : jobs.length + ' 个定时 · ' + clockShort(d);
     }
     els.scheduleChip.title = jobs.length + ' 个定时解锁任务，最近一个 ' + clockLabel(d) + ' 开始（点击查看）';
   }
@@ -2155,7 +2174,7 @@
 
   function jobMetaText(job) {
     var d = new Date((job.at || 0) * 1000);
-    var bits = [dayLabel(d) + ' ' + hhmm(d.getHours(), d.getMinutes())];
+    var bits = [dayLabel(d) + ' ' + clockShort(d)];
     if (job.done || job.total) {
       bits.push('进行中 ' + (job.done || 0) + ' / ' + (job.total || 0));
     } else if (job.count > 0) {
@@ -2185,7 +2204,7 @@
     if (jobs.length === 0) {
       parts.push('<p class="modal__text">还没有定时任务。在游戏页点「定时解锁」，或在游戏库点「定时批量解锁」。</p>');
     } else {
-      parts.push('<p class="modal__text">到点前请保持本工具和 Steam 都开着。任务只在开始前 25 秒拉起解锁进程，之后可以在任务上取消。</p>');
+      parts.push('<p class="modal__text">到点前请保持本工具和 Steam 都开着。任务在开始前 40 秒拉起解锁进程（先连好 Steam，再等到那一秒），之后可以在任务上取消。</p>');
       parts.push('<div class="sch-jobs">');
       for (var i = 0; i < jobs.length; i++) {
         var job = jobs[i];
@@ -2273,7 +2292,7 @@
   function openScheduleGameModal(pool) {
     closeModal();
     var list = Array.isArray(pool) ? pool : [];
-    var sel = { count: 0, gap: 1, rare: 0, hour: 22, minute: 22 };
+    var sel = { count: 0, gap: 1, rare: 0, hour: 22, minute: 22, second: 0 };
     var el = document.createElement('div');
     el.className = 'modal modal--wide';
     el.setAttribute('role', 'dialog');
@@ -2286,7 +2305,7 @@
     body.push('</div>');
     body.push('<p class="modal__text" data-role="summary"></p>');
     body.push('<div class="sch-block">');
-    body.push(timeRowHtml(sel.hour, sel.minute));
+    body.push(timeRowHtml(sel.hour, sel.minute, sel.second));
     body.push('<p class="gap-custom__hint" data-role="timeHint"></p>');
     body.push('</div>');
     body.push('<div data-role="rareBox">' + optGroupHtml('rare', '解锁范围', schedRareItems(list), 0) + '</div>');
@@ -2306,13 +2325,15 @@
     var timeHint = el.querySelector('[data-role="timeHint"]');
     var hourInput = el.querySelector('[data-role="hour"]');
     var minuteInput = el.querySelector('[data-role="minute"]');
+    var secondInput = el.querySelector('[data-role="second"]');
     var okBtn = el.querySelector('[data-role="ok"]');
 
     function targetDate() {
-      var c = readClock(hourInput, minuteInput);
+      var c = readClock(hourInput, minuteInput, secondInput);
       sel.hour = c.hour;
       sel.minute = c.minute;
-      return nextAt(c.hour, c.minute);
+      sel.second = c.second;
+      return nextAt(c.hour, c.minute, c.second);
     }
 
     function syncAll() {
@@ -2326,14 +2347,15 @@
       var delay = Math.min(5, gap.min);
       var totalLow = n > 0 ? delay + (n - 1) * gap.min : 0;
       var totalHigh = n > 0 ? delay + (n - 1) * gap.max : 0;
-      var clock = hhmm(target.getHours(), target.getMinutes());
+      var clock = clockShort(target);
 
       if (timeHint) {
-        timeHint.textContent = dayLabel(target) + ' ' + clock + ' 开始（' + countdownText(target) + '）';
+        var near = target.getTime() - Date.now() < 60000 ? '（时间很近，可能来不及预热 Steam，建议至少留 1 分钟）' : '';
+        timeHint.textContent = dayLabel(target) + ' ' + clock + ' 开始（' + countdownText(target) + '）' + near;
       }
       var qs = el.querySelectorAll('[data-quick]');
       for (var qi = 0; qi < qs.length; qi++) {
-        if (qs[qi].getAttribute('data-quick') === hhmm(sel.hour, sel.minute)) qs[qi].classList.add('is-active');
+        if (qs[qi].getAttribute('data-quick') === hhmm(sel.hour, sel.minute) && sel.second === 0) qs[qi].classList.add('is-active');
         else qs[qi].classList.remove('is-active');
       }
 
@@ -2360,6 +2382,8 @@
     if (hourInput) hourInput.addEventListener('change', syncAll);
     if (minuteInput) minuteInput.addEventListener('input', syncAll);
     if (minuteInput) minuteInput.addEventListener('change', syncAll);
+    if (secondInput) secondInput.addEventListener('input', syncAll);
+    if (secondInput) secondInput.addEventListener('change', syncAll);
 
     el.addEventListener('click', function (e) {
       var quick = e.target.closest ? e.target.closest('[data-quick]') : null;
@@ -2369,6 +2393,7 @@
         var m = Math.floor(Number(vs[1]));
         if (hourInput) hourInput.value = String(isFinite(h) ? h : 0);
         if (minuteInput) minuteInput.value = String(isFinite(m) ? m : 0);
+        if (secondInput) secondInput.value = '0';
         syncAll();
         return;
       }
@@ -2446,7 +2471,7 @@
 
   function openScheduleBatchModal(games) {
     closeModal();
-    var sel = { count: 0, gap: 1, hour: 22, minute: 22 };
+    var sel = { count: 0, gap: 1, hour: 22, minute: 22, second: 0 };
     var el = document.createElement('div');
     el.className = 'modal modal--wide';
     el.setAttribute('role', 'dialog');
@@ -2459,7 +2484,7 @@
     body.push('</div>');
     body.push('<p class="modal__text" data-role="summary"></p>');
     body.push('<div class="sch-block">');
-    body.push(timeRowHtml(sel.hour, sel.minute));
+    body.push(timeRowHtml(sel.hour, sel.minute, sel.second));
     body.push('<p class="gap-custom__hint" data-role="timeHint"></p>');
     body.push('</div>');
 
@@ -2499,15 +2524,17 @@
     var timeHint = el.querySelector('[data-role="timeHint"]');
     var hourInput = el.querySelector('[data-role="hour"]');
     var minuteInput = el.querySelector('[data-role="minute"]');
+    var secondInput = el.querySelector('[data-role="second"]');
     var pickedEl = el.querySelector('[data-role="picked"]');
     var gamesBox = el.querySelector('[data-role="games"]');
     var okBtn = el.querySelector('[data-role="ok"]');
 
     function targetDate() {
-      var c = readClock(hourInput, minuteInput);
+      var c = readClock(hourInput, minuteInput, secondInput);
       sel.hour = c.hour;
       sel.minute = c.minute;
-      return nextAt(c.hour, c.minute);
+      sel.second = c.second;
+      return nextAt(c.hour, c.minute, c.second);
     }
 
     function pickedIds() {
@@ -2528,15 +2555,16 @@
       var gaps = schedGaps();
       var gap = gaps[sel.gap] || gaps[1];
       var countOpt = SCHEDULE_BATCH_COUNTS[sel.count] || SCHEDULE_BATCH_COUNTS[0];
-      var clock = hhmm(target.getHours(), target.getMinutes());
+      var clock = clockShort(target);
 
       if (pickedEl) pickedEl.textContent = String(ids.length);
       if (timeHint) {
-        timeHint.textContent = dayLabel(target) + ' ' + clock + ' 开始（' + countdownText(target) + '）';
+        var near = target.getTime() - Date.now() < 60000 ? '（时间很近，可能来不及预热 Steam，建议至少留 1 分钟）' : '';
+        timeHint.textContent = dayLabel(target) + ' ' + clock + ' 开始（' + countdownText(target) + '）' + near;
       }
       var qs = el.querySelectorAll('[data-quick]');
       for (var qi = 0; qi < qs.length; qi++) {
-        if (qs[qi].getAttribute('data-quick') === hhmm(sel.hour, sel.minute)) qs[qi].classList.add('is-active');
+        if (qs[qi].getAttribute('data-quick') === hhmm(sel.hour, sel.minute) && sel.second === 0) qs[qi].classList.add('is-active');
         else qs[qi].classList.remove('is-active');
       }
       if (summaryText) {
@@ -2558,6 +2586,8 @@
     if (hourInput) hourInput.addEventListener('change', syncAll);
     if (minuteInput) minuteInput.addEventListener('input', syncAll);
     if (minuteInput) minuteInput.addEventListener('change', syncAll);
+    if (secondInput) secondInput.addEventListener('input', syncAll);
+    if (secondInput) secondInput.addEventListener('change', syncAll);
     if (gamesBox) gamesBox.addEventListener('change', syncAll);
 
     el.addEventListener('click', function (e) {
@@ -2568,6 +2598,7 @@
         var m = Math.floor(Number(vs[1]));
         if (hourInput) hourInput.value = String(isFinite(h) ? h : 0);
         if (minuteInput) minuteInput.value = String(isFinite(m) ? m : 0);
+        if (secondInput) secondInput.value = '0';
         syncAll();
         return;
       }
@@ -3433,7 +3464,7 @@
   }
 
   window.SAM = {
-    version: '1.9.0',
+    version: '1.9.1',
     handleEvent: handleEvent,
     mock: enterMock,
     getState: function () {

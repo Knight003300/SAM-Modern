@@ -27,20 +27,14 @@ namespace SAM.Modern
             int jitter = 0;
             if (job.Jitter > 0) jitter = new Random().Next(0, job.Jitter + 1);
             long target = job.At + jitter;
+            long targetMs = target * 1000L;
             Log.Write("schedule worker: id=" + job.Id + " appId=" + job.AppId + " target=" + target
-                + " jitter=" + jitter + " now=" + ScheduleStore.Now());
+                + " jitter=" + jitter + " now=" + ScheduleStore.Now() + " nowMs=" + ScheduleStore.NowMs());
 
             ScheduleStore.WriteProgress(job.Id, 0, 0, "", target);
 
-            // 先睡到目标时刻。每 250ms 醒一次，睡眠不会累积误差。
-            while (true)
-            {
-                long now = ScheduleStore.Now();
-                long remain = target - now;
-                if (remain <= 0) break;
-                Thread.Sleep(remain > 2 ? 250 : 100);
-            }
-
+            // 先把 Steam 连接、统计数据、候选成就全部准备好，再等到目标那一秒动手。
+            // 这样「到点」指的就是第一个成就真正写进 Steam 的时刻，而不是进程被拉起的时刻。
             var host = new SteamHost();
             bool statsReady = false;
             try
@@ -86,6 +80,16 @@ namespace SAM.Modern
                 try { host.Dispose(); } catch (Exception) { }
                 return;
             }
+
+            // 等到目标时刻（毫秒级对齐）：最后 10ms 才细睡，避免长时间空转。
+            while (true)
+            {
+                long remain = targetMs - ScheduleStore.NowMs();
+                if (remain <= 0) break;
+                Thread.Sleep((int)Math.Min(remain, 10));
+            }
+            Log.Write("schedule worker: reached target nowMs=" + ScheduleStore.NowMs() + " driftMs=" +
+                      (ScheduleStore.NowMs() - targetMs));
 
             Log.Write("schedule worker: unlocking " + ids.Count + " achievements");
             var api = host.Client.SteamUserStats;

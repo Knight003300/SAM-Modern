@@ -45,6 +45,12 @@ namespace SAM.Modern
             return (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
         }
 
+        /// <summary>毫秒级当前时间：worker 等到精确的某一秒要用，秒级精度会抖 ±1s。</summary>
+        public static long NowMs()
+        {
+            return (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
+        }
+
         public static string JobPath(string id) { return Path.Combine(Root, "job-" + id + ".json"); }
         public static string ClaimPath(string id) { return Path.Combine(Root, "job-" + id + ".claim"); }
         public static string ProgressPath(string id) { return Path.Combine(Root, "job-" + id + ".progress"); }
@@ -260,7 +266,7 @@ namespace SAM.Modern
         private readonly Dictionary<string, long> _running = new Dictionary<string, long>(StringComparer.Ordinal);
         private string _lastPublished;
 
-        private const int LeadSeconds = 25;      // 提前多久把 worker 拉起来（worker 自己等到点）
+        private const int LeadSeconds = 40;      // 提前多久把 worker 拉起来（worker 先连 Steam 备好数据，再等到点）
         private const int LateGraceSeconds = 3600;
         private const int ClaimStaleSeconds = 180;
 

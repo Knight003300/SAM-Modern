@@ -81,7 +81,7 @@ Game：
   排一条定时解锁任务，写入 `<程序目录>\schedule\job-<id>.json`。`count=0` 表示「全部剩余」；`achievements` 非空时按这个显式列表解锁（忽略 `count`/`rareOnly`）。
   `at` 必须晚于当前时间 2 秒、且不超过一年；`minGap>=1`、`maxGap>=minGap`、`maxGap<=7 天`、`rarePct` 0–100、`jitter` 0–3600 秒，越界值由 C# 侧夹紧。
 - `{cmd:"schedule/createBatch", at:number, minGap:number, maxGap:number, jitter?:number, language?:string, games:[{ appId, gameName, count, rareOnly?, rarePct? }]}`
-  一次排多条任务（多游戏同一分钟开始）。公共字段会补进每个 game 项（只在缺键时补），逐条走与 `schedule/create` 相同的校验与落盘。
+  一次排多条任务（多游戏同一秒开始）。公共字段会补进每个 game 项（只在缺键时补），逐条走与 `schedule/create` 相同的校验与落盘。
 - `{cmd:"schedule/cancel", id:string}`  删掉一条任务（同时删 job / claim / progress / result 文件）
 
 定时任务的执行是**独立隐藏进程**：调度器在 `at - 25s` 时 `Process.Start(自身 exe, "--run-job <job 文件>")`，`UseShellExecute=false`、`CreateNoWindow=true`，该进程不建窗口、不初始化 WebView2，只做 `SetAchievement` + `StoreStats` 并写回 `result-<id>.json`。因此**程序退出后任务不会执行**。
