@@ -11,7 +11,7 @@
     "achievements"
   ],
   "homepage": "https://github.com/Knight003300/SAM-Modern",
-  "tag": "v1.3.1",
-  "releaseName": "SAM Modern v1.3.1 · 返回游戏库即退出游戏",
-  "releaseBody": "v1.3.1 · 修一个体验上的小 bug：返回游戏库后，Steam 里那个游戏还显示「运行中」。\n\n**下载 `SAM-Modern-zhCN.zip`，解压后双击 `SAM.Modern.exe` 即可运行**（免安装，需已安装并登录 Steam）。\n\n### 修复\n- 点「返回游戏库」后，Steam 客户端里那个游戏会立刻恢复成未运行状态，不再一直挂着「运行中」。\n- 原因：本程序换游戏靠「进程接力」，子进程会继承父进程环境变量里的 `SteamAppId`；游戏库进程把 appId 传成 0，但 `SAM.API` 的 `Client.Initialize(0)` 只是「不设置」，并不会清掉继承来的值，于是游戏库窗口仍以旧 appId 连着 `steamclient.dll`，Steam 就认为那个游戏还在跑。\n- 现在 appId 为 0 时会显式清除 `SteamAppId`，并在窗口关闭时主动释放 Steam 管道（`host.Dispose()`）。\n\n### 说明\n- 本项目是 [gibbed/SteamAchievementManager](https://github.com/gibbed/SteamAchievementManager) 的二次修改版，保留并直接复用上游 `SAM.API`，界面层全部重写。上游 zlib License。\n- 首次运行可能被 SmartScreen 拦一下（无信誉记录的新程序），点「更多信息 → 仍要运行」。\n- 只修改本地 Steam 用户数据，不上传、不联网写库。"
+  "tag": "v1.6.0",
+  "releaseName": "SAM Modern v1.6.0 · 修好窗口放大",
+  "releaseBody": "v1.6.0 · 修一个被好几个人反馈的窗口问题：Win11 下窗口**放不大**。\n\n**下载 `SAM-Modern-zhCN.zip`，解压后双击 `SAM.Modern.exe` 即可运行**（免安装，需已安装并登录 Steam）。\n\n### 修复\n- **窗口放大**：以前只有右上角那个按钮能最大化，系统的放大方式全都没反应 —— Win+↑ / Win+↓、双击标题栏、把窗口拖到屏幕顶部贴边（Aero Snap），一条都不可用。原因是无边框窗口缺少 `WS_THICKFRAME`，Windows 根本不认为它是个「可缩放 / 可贴边」的窗口。现在这四条路径都能用了。\n- **最大化不再压住任务栏**：以前最大化按整块显示器算尺寸，底部的状态栏会被任务栏盖住；现在最大化区域严格等于任务栏以上的可用区域，多显示器下也不会跑到屏幕外。\n- **修掉「越还原越大」**：无边框窗下系统按「最大化尺寸 − 边框」推算还原尺寸，而边框是 0，于是每还原一次窗口就大一圈（实测每次 +16px）。现在会记住最大化前的矩形，还原时摆回原样。\n- **双击标题栏和拖动不再打架**：标题栏改成指针移动超过一小段距离才进入系统拖动，双击最大化可以正常用了。\n- **按钮图标跟着变**：最大化后右上角按钮会变成「还原」图标。\n- **高 DPI 小屏**：启动尺寸与最小尺寸按当前显示器工作区夹紧，屏幕比窗口小的时候不会再溢出屏幕。\n- 顺带修掉切换游戏时左上角闪一下控制台黑窗的问题。\n\n### 说明\n- 本项目是 [gibbed/SteamAchievementManager](https://github.com/gibbed/SteamAchievementManager) 的二次修改版，保留并直接复用上游 `SAM.API`，界面层全部重写。上游 zlib License。\n- 首次运行可能被 SmartScreen 拦一下（无信誉记录的新程序），点「更多信息 → 仍要运行」。\n- 只修改本地 Steam 用户数据，不上传、不联网写库。"
 }
