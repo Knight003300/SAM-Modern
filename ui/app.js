@@ -257,6 +257,9 @@
       case 'mock':
         if (!state.mock) enterMock();
         break;
+      case 'window':
+        applyWindowState(!!ev.maximized);
+        break;
       default:
         console.warn('[SAM] 未识别的事件：' + name, ev);
     }
@@ -2208,6 +2211,20 @@
     els.modalRoot = document.getElementById('modalRoot');
   }
 
+  /* 标题栏右上角的「最大化 / 还原」图标随窗口状态切换：主机最大化后会把状态推过来。 */
+  var WIN_ICON_MAX = '<svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><rect x="2.4" y="2.4" width="5.2" height="5.2" rx="1.1" /></svg>';
+  var WIN_ICON_RESTORE = '<svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><rect x="2.1" y="3.7" width="4.2" height="4.2" rx="1" /><path d="M3.9 3.7v-.6a1 1 0 0 1 1-1h2.9a1 1 0 0 1 1 1v2.9a1 1 0 0 1-1 1h-.6" /></svg>';
+
+  function applyWindowState(maximized) {
+    if (!els.btnMax) return;
+    var next = maximized ? WIN_ICON_RESTORE : WIN_ICON_MAX;
+    if (els.btnMax.getAttribute('data-maximized') === (maximized ? '1' : '0')) return;
+    els.btnMax.setAttribute('data-maximized', maximized ? '1' : '0');
+    els.btnMax.innerHTML = next;
+    els.btnMax.title = maximized ? '还原' : '最大化';
+    els.btnMax.setAttribute('aria-label', maximized ? '还原' : '最大化');
+  }
+
   function bindWindowControls() {
     if (els.btnMin) els.btnMin.addEventListener('click', function () { send('win/minimize'); });
     if (els.btnMax) els.btnMax.addEventListener('click', function () { send('win/maximize'); });
@@ -2215,11 +2232,23 @@
 
     var bar = document.getElementById('titlebar');
     if (bar) {
+      // 按下时不立刻进入系统拖动：一旦 ReleaseCapture + WM_NCLBUTTONDOWN，鼠标就被拖动循环独占，
+      // 页面收不到第二次点击，双击标题栏最大化会失效。改成移动超过阈值才发起拖动，
+      // 单击/双击都留在页面里，拖动的手感几乎没有差别。
+      var dragOrigin = null;
       bar.addEventListener('mousedown', function (e) {
         if (e.button !== 0) return;
         if (e.target.closest && e.target.closest('.winbtns')) return;
+        dragOrigin = { x: e.screenX, y: e.screenY };
+      });
+      window.addEventListener('mousemove', function (e) {
+        if (dragOrigin === null) return;
+        if (Math.abs(e.screenX - dragOrigin.x) < 3 && Math.abs(e.screenY - dragOrigin.y) < 3) return;
+        dragOrigin = null;
         send('win/drag');
       });
+      window.addEventListener('mouseup', function () { dragOrigin = null; });
+      window.addEventListener('blur', function () { dragOrigin = null; });
       bar.addEventListener('dblclick', function (e) {
         if (e.target.closest && e.target.closest('.winbtns')) return;
         send('win/maximize');
@@ -2567,7 +2596,7 @@
   }
 
   window.SAM = {
-    version: '1.5.0',
+    version: '1.6.0',
     handleEvent: handleEvent,
     mock: enterMock,
     getState: function () {

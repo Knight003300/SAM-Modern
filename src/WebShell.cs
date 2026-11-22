@@ -18,6 +18,10 @@ namespace SAM.Modern
         private const int HtCaption = 0x0002;
         private const int HtLeft = 10, HtRight = 11, HtTop = 12, HtTopLeft = 13, HtTopRight = 14, HtBottom = 15, HtBottomLeft = 16, HtBottomRight = 17;
         private const int ResizeBorder = 6;
+        private const int WmGetMinMaxInfo = 0x0024;
+        private const int WmNcCalcSize = 0x0083;
+        private const int MonitorDefaultToNearest = 0x00000002;
+        private const int WsThickFrame = 0x00040000;
         private const int DwmwaWindowCornerPreference = 33;
         private const int DwmwcpRound = 2;
         private const int CornerRadius = 10;
@@ -37,6 +41,48 @@ namespace SAM.Modern
         [DllImport("user32.dll")]
         private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
+        [DllImport("user32.dll")]
+        private static extern IntPtr MonitorFromWindow(IntPtr hwnd, int flags);
+
+        [DllImport("user32.dll")]
+        private static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct NativePoint
+        {
+            public int X;
+            public int Y;
+        }
+
+        /// <summary>WM_GETMINMAXINFO 的参数：系统按「整块显示器」算最大化尺寸，无边框窗会盖住任务栏，所以要自己改。</summary>
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MinMaxInfo
+        {
+            public NativePoint Reserved;
+            public NativePoint MaxSize;
+            public NativePoint MaxPosition;
+            public NativePoint MinTrackSize;
+            public NativePoint MaxTrackSize;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct NativeRect
+        {
+            public int Left;
+            public int Top;
+            public int Right;
+            public int Bottom;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MonitorInfo
+        {
+            public int Size;
+            public NativeRect Monitor;
+            public NativeRect Work;
+            public uint Flags;
+        }
+
         protected readonly WebView2 Web = new WebView2();
         protected readonly Bridge Bridge;
         private readonly string _uiDirectory;
@@ -47,8 +93,15 @@ namespace SAM.Modern
         {
             this.Text = title;
             this.FormBorderStyle = FormBorderStyle.None;
-            this.MinimumSize = new Size(920, 620);
-            this.Size = new Size(1280, 840);
+
+            // 尺寸不能写死：高 DPI 小屏（例如 1366x768 @150% → 工作区只有约 911x485 逻辑像素）上，
+            // 写死的 920x620 最小尺寸比整个工作区还大，窗口永远放不下，用户看到的就是「放不大」。
+            Rectangle work = Screen.PrimaryScreen.WorkingArea;
+            Size minimum = new Size(Math.Min(920, work.Width), Math.Min(620, work.Height));
+            Size preferred = new Size(Math.Min(1280, work.Width), Math.Min(840, work.Height));
+            this.MinimumSize = minimum;
+            this.Size = preferred;
+            this.MaximizedBounds = work;
             if (StartupBounds.IsEmpty == false && StartupBounds.Width >= 320 && StartupBounds.Height >= 240)
             {
                 this.StartPosition = FormStartPosition.Manual;
@@ -100,8 +153,13 @@ namespace SAM.Modern
             var trace = new System.Text.StringBuilder();
             Action<string> mark = delegate (string name) { trace.Append(name).Append('=').Append(clock.ElapsedMilliseconds).Append(' '); };
 
+            Rectangle area = Screen.PrimaryScreen.WorkingArea;
             Size targetSize = this._explicitBounds ? StartupBounds.Size : new Size(1280, 840);
             if (targetSize.Width < 320 || targetSize.Height < 240) targetSize = new Size(1280, 840);
+            // 目标尺寸不能超过工作区：显式 bounds 也可能是上一个窗口在更大的屏幕上留下的。
+            targetSize = new Size(
+                Math.Min(targetSize.Width, area.Width),
+                Math.Min(targetSize.Height, area.Height));
 
             Point targetLocation;
             if (this._explicitBounds)
@@ -110,7 +168,6 @@ namespace SAM.Modern
             }
             else
             {
-                Rectangle area = Screen.PrimaryScreen.WorkingArea;
                 targetLocation = new Point(
                     area.Left + Math.Max(0, (area.Width - targetSize.Width) / 2),
                     area.Top + Math.Max(0, (area.Height - targetSize.Height) / 2));
@@ -313,6 +370,8 @@ namespace SAM.Modern
                 var info = new System.Diagnostics.ProcessStartInfo();
                 info.FileName = Application.ExecutablePath;
                 info.UseShellExecute = false;
+                // 接力子进程是控制台程序：不抑制的话每次切换都会在桌面上闪一个黑窗口。
+                info.CreateNoWindow = true;
                 info.Arguments = Relay.BuildArguments(appId, ready, bounds, maximized, parentPid);
                 this._relayChild = System.Diagnostics.Process.Start(info);
                 Log.Write("relay launch appId=" + appId + " pid=" + (this._relayChild == null ? 0 : this._relayChild.Id) + " parent=" + parentPid + " args=" + info.Arguments);
@@ -548,8 +607,14 @@ namespace SAM.Modern
             {
                 if (bounds.IsEmpty == false && bounds.Width >= 320 && bounds.Height >= 240)
                 {
+                    // 上一个窗口记下的位置可能来自更大的屏幕：夹回当前工作区，别让窗口跑到屏幕外。
+                    Rectangle work = Screen.FromRectangle(bounds).WorkingArea;
                     this.StartPosition = FormStartPosition.Manual;
-                    this.Bounds = bounds;
+                    this.Bounds = new Rectangle(
+                        bounds.X,
+                        bounds.Y,
+                        Math.Min(bounds.Width, work.Width),
+                        Math.Min(bounds.Height, work.Height));
                 }
                 this.Show();
                 if (maximized) this.WindowState = FormWindowState.Maximized;
@@ -717,7 +782,95 @@ namespace SAM.Modern
         {
             base.OnResize(e);
             this.ApplyRoundedRegion();
+            this.SyncNormalBounds();
+            this.BroadcastWindowState();
         }
+
+        private Rectangle _normalBounds;
+        private bool _wasMaximized;
+        private bool _restoringBounds;
+        private System.Windows.Forms.Timer _restoreTimer;
+        private Rectangle _restoreTarget;
+
+        /// <summary>
+        /// 无边框窗（WS_THICKFRAME + 客户区吃满整个窗口）有个副作用：系统按「最大化矩形减去边框」推算还原尺寸，
+        /// 而这里的边框是 0，于是每还原一次窗口就长大一圈（实测 1920x1020 → 1936x1036 → 1952x1052）。
+        /// 自己记住最大化前的矩形，还原时按它摆回去。
+        /// </summary>
+        private void SyncNormalBounds()
+        {
+            if (this._restoringBounds) return;
+            bool maximized = this.WindowState == FormWindowState.Maximized;
+            if (maximized)
+            {
+                this._wasMaximized = true;
+                return;
+            }
+
+            if (this._wasMaximized)
+            {
+                this._wasMaximized = false;
+                if (this._normalBounds.IsEmpty == false) this.StartRestoreNormalBounds(this._normalBounds);
+                return;
+            }
+
+            if (this._restoreTimer != null) return;
+            if (this._revealed && this.Visible)
+            {
+                this._normalBounds = this.Bounds;
+            }
+        }
+
+        /// <summary>
+        /// 系统自己会把「还原矩形」再改一次（它按最大化矩形减边框推算，边框是 0 于是越还原越大），
+        /// 单次赋值会被它随后覆盖。这里用短命计时器连按几帧，直到窗口真的停在记录值上。
+        /// </summary>
+        private void StartRestoreNormalBounds(Rectangle target)
+        {
+            this._restoreTarget = target;
+            if (this._restoreTimer != null) return;
+            var timer = new System.Windows.Forms.Timer();
+            this._restoreTimer = timer;
+            timer.Interval = 16;
+            int ticks = 0;
+            timer.Tick += delegate
+            {
+                ticks++;
+                if (ticks > 40 || this.IsDisposed || this.WindowState != FormWindowState.Normal)
+                {
+                    timer.Stop();
+                    timer.Dispose();
+                    this._restoreTimer = null;
+                    return;
+                }
+                if (this.Bounds == this._restoreTarget) return;
+                try
+                {
+                    this._restoringBounds = true;
+                    this.Bounds = this._restoreTarget;
+                }
+                finally { this._restoringBounds = false; }
+            };
+            timer.Start();
+        }
+
+        /// <summary>把最大化状态告诉页面：标题栏的「最大化 / 还原」图标靠它切换。</summary>
+        private void BroadcastWindowState()
+        {
+            try
+            {
+                if (this._webReady == false) return;
+                bool maximized = this.WindowState == FormWindowState.Maximized;
+                if (maximized == this._lastMaximizedReport) return;
+                this._lastMaximizedReport = maximized;
+                Log.Write("window state maximized=" + maximized + " bounds=" + this.Bounds + " client=" + this.ClientSize +
+                    " work=" + Screen.FromHandle(this.Handle).WorkingArea);
+                this.Bridge.Send("{\"ev\":\"window\",\"maximized\":" + (maximized ? "true" : "false") + "}");
+            }
+            catch (Exception) { }
+        }
+
+        private bool _lastMaximizedReport;
 
         /// <summary>Windows 11 交给 DWM 圆角；旧系统用窗口区域裁出同样的圆角。</summary>
         private void ApplyRoundedRegion()
@@ -799,6 +952,8 @@ namespace SAM.Modern
 
             this.Bridge.Flush();
             this.OnPageReady();
+            this._lastMaximizedReport = false;
+            this.BroadcastWindowState();
             this.StartPaintWatch();
         }
 
@@ -978,8 +1133,73 @@ namespace SAM.Modern
             Log.Write("unhandled command: " + cmd);
         }
 
+        /// <summary>
+        /// 无边框窗默认没有 WS_THICKFRAME，Windows 就不认它是「可缩放/可贴边」的窗口：
+        /// 拖到屏幕顶部不会最大化、Win+方向键也不生效。补回该样式位（边框由我们自己绘制，不会露出来）。
+        /// </summary>
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams cp = base.CreateParams;
+                cp.Style |= WsThickFrame;
+                return cp;
+            }
+        }
+
+        /// <summary>
+        /// 无边框窗最大化时，系统按整块显示器算尺寸（含任务栏区域），会把底栏压到任务栏底下。
+        /// 这里按「工作区」给出最大化尺寸与位置。
+        /// </summary>
+        private void ApplyMaximizedBounds(ref Message m)
+        {
+            try
+            {
+                IntPtr monitor = MonitorFromWindow(this.Handle, MonitorDefaultToNearest);
+                if (monitor == IntPtr.Zero) return;
+
+                var info = new MonitorInfo();
+                info.Size = Marshal.SizeOf(typeof(MonitorInfo));
+                if (GetMonitorInfo(monitor, ref info) == false) return;
+
+                var mmi = (MinMaxInfo)Marshal.PtrToStructure(m.LParam, typeof(MinMaxInfo));
+                NativeRect work = info.Work;
+                mmi.MaxPosition.X = work.Left - info.Monitor.Left;
+                mmi.MaxPosition.Y = work.Top - info.Monitor.Top;
+                mmi.MaxSize.X = work.Right - work.Left;
+                mmi.MaxSize.Y = work.Bottom - work.Top;
+                Marshal.StructureToPtr(mmi, m.LParam, false);
+                m.Result = IntPtr.Zero;
+            }
+            catch (Exception error)
+            {
+                Log.Write("getminmaxinfo failed", error);
+            }
+        }
+
         protected override void WndProc(ref Message m)
         {
+            if (m.Msg == WmGetMinMaxInfo)
+            {
+                this.ApplyMaximizedBounds(ref m);
+                return;
+            }
+
+            // 为了恢复贴边/缩放能力加了 WS_THICKFRAME，但系统会因此画出一圈非客户区边框
+            // （无边框窗里就是一圈没画过的浅灰，非常难看）。这里把客户区直接当成整个窗口：
+            // 既保留系统的缩放/贴边判定，又不让边框露出来。
+            if (m.Msg == WmNcCalcSize)
+            {
+                if (m.WParam != IntPtr.Zero)
+                {
+                    // wParam=TRUE：系统已经算好目标矩形（最大化时就是工作区），原样交回即可。
+                    m.Result = IntPtr.Zero;
+                    return;
+                }
+                base.WndProc(ref m);
+                return;
+            }
+
             if (m.Msg == WmNcHitTest && this.WindowState == FormWindowState.Normal)
             {
                 base.WndProc(ref m);

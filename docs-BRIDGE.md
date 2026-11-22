@@ -24,6 +24,7 @@ window.chrome.webview.addEventListener('message', e => handle(e.data));
 - `{ ev:"status", text:"...", busy:true|false }` 状态栏文案 + 是否转圈。
 - `{ ev:"toast", kind:"info"|"success"|"error"|"warn", title:"...", text:"..." }` 右上角浮层提示（自动消失）。
 - `{ ev:"error", title:"...", text:"..." }` 需用户确认的错误（模态）。
+- `{ ev:"window", maximized:boolean }` 窗口最大化状态变化（按钮、双击标题栏、Win+↑/↓、拖到屏幕顶部触发 Aero Snap 都会发）。UI 据此把最大化按钮的图标与 `title` 在「最大化 / 还原」之间切换。`ui/ready` 之后也会补发一次当前状态。
 
 ### Picker（选游戏界面）
 - `{ ev:"games", games:[{ id:number, name:string, type:"normal"|"demo"|"mod"|"junk", capsule:string|null }], total:number, cached:boolean }`
@@ -44,7 +45,9 @@ window.chrome.webview.addEventListener('message', e => handle(e.data));
 
 ## 4. 命令表（JS → C#）
 窗口控制（两种模式都可用）：
-- `{cmd:"win/minimize"}` / `{cmd:"win/maximize"}` / `{cmd:"win/close"}` / `{cmd:"win/drag"}`（标题栏按下时发，C# 接管拖动）
+- `{cmd:"win/minimize"}` / `{cmd:"win/maximize"}` / `{cmd:"win/close"}` / `{cmd:"win/drag"}`
+  `win/maximize` 是**切换**（Normal ↔ Maximized），不是单向最大化。
+  `win/drag` 是「开始拖动窗口」：C# 收到后 `ReleaseCapture()` + `WM_NCLBUTTONDOWN(HtCaption)`，把鼠标交给系统拖动循环。**一旦发出，页面就收不到后续的 mouseup / dblclick**，所以必须在指针移动超过阈值（约 3px）时才发，不能按下即发，否则双击标题栏最大化会失效。
 
 生命周期上报（**必须实现**，否则窗口不会显示）：
 - `{cmd:"ui/ready"}`  页面 `load` 完成时发一次，C# 据此推数据。
@@ -73,7 +76,8 @@ Game：
 - 简体中文界面文案（成就名/描述来自 Steam 数据，可能是中文或英文，原样显示）。
 - 克制的深色中性风格：四级灰阶背景 + 三级文字色，唯一强调色 `#4d8dff`，破坏性操作用 `#ff6b5e`；不用彩色色相区分类别，不用渐变/玻璃拟态/发光阴影。无外部字体/CDN 依赖（只用系统字体）。
 - 单页应用，`ui/index.html` + `ui/app.css` + `ui/app.js`，纯原生 JS，无构建步骤。
-- 自定义标题栏（frameless），最小化/最大化/关闭按钮放右上角，标题栏可拖动。
+- 自定义标题栏（frameless），最小化/最大化/关闭按钮放右上角，标题栏可拖动；双击标题栏切换最大化。
+- 窗口虽然无边框，但必须保留系统级缩放/贴边能力：Win+↑/↓、拖到屏幕顶部 Aero Snap、拖动边缘改变大小都要能用（宿主侧通过 `WS_THICKFRAME` + `WM_GETMINMAXINFO` + `WM_NCCALCSIZE` 实现，最大化区域等于显示器工作区、不压任务栏）。
 - 成就行列表、搜索框、筛选（全部/已解锁/未解锁/稀有）、全选/反选按钮、数字进度条、统计表格可编辑。
 - 视觉 token 固定：间距只用 4/8/12/16/24/32/48，圆角只有 8px 一档，字号 4 档（24/15/13/11），字重只有 400/600。
 - 键盘可用（Esc 关闭弹窗，Ctrl+S 保存，Ctrl+F 聚焦搜索）。

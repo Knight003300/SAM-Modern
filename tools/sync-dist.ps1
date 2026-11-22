@@ -27,9 +27,13 @@ foreach ($n in $payload) {
     'copied ' + $n
   } else { 'MISSING in build: ' + $n }
 }
-# markdown docs: copy every .md from build (filenames may be non-ASCII)
-foreach ($md in @(Get-ChildItem -LiteralPath $build -File | Where-Object { $_.Extension -eq '.md' })) {
+# markdown docs: take them from the repo root (source of truth) and refresh the build/ copies.
+# build/*.md used to be hand-copied and silently went stale — the shipped README kept describing an old version.
+# 按通配取根目录的 .md，不要在这里写中文文件名：Windows PowerShell 5.1 按 ANSI 读脚本，
+# 源码里的中文会变成乱码，文件名匹配不上（曾因此把「使用说明.md」漏拷）。
+foreach ($md in @(Get-ChildItem -LiteralPath $root -File | Where-Object { $_.Extension -eq '.md' })) {
   Copy-Item -LiteralPath $md.FullName -Destination (Join-Path $dist $md.Name) -Force
+  Copy-Item -LiteralPath $md.FullName -Destination (Join-Path $build $md.Name) -Force
   'copied ' + $md.Name
 }
 $distUi = Join-Path $dist 'ui'
