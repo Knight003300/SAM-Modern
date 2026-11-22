@@ -1822,6 +1822,8 @@ dt {
 }
 
 .sch-job__name {
+  min-width: 0;
+  flex: 0 1 auto;
   font-size: var(--t-body);
   font-weight: 600;
   color: var(--text-1);
@@ -1830,13 +1832,37 @@ dt {
   text-overflow: ellipsis;
 }
 
+
+
 .sch-job__meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  min-width: 0;
   font-size: var(--t-micro);
   letter-spacing: .02em;
   color: var(--text-3);
   white-space: nowrap;
+}
+
+/* 信息文字自己截断，右边那口钟永远完整显示 */
+.sch-job__meta > [data-meta] {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 实时北京时间（毫秒）：等宽数字，避免每秒跳动时整行抖动 */
+.sch-job__clock {
+  flex: none;
+  margin-left: auto;
+  padding-left: var(--s2);
+  font-size: var(--t-micro);
+  letter-spacing: .02em;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* 批量选游戏：列表自己滚，弹窗正文不再长高 */

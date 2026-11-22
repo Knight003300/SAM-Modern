@@ -1334,6 +1334,10 @@
       window.clearInterval(modalState.tick);
       modalState.tick = null;
     }
+    if (modalState.clock) {
+      window.clearInterval(modalState.clock);
+      modalState.clock = null;
+    }
     modalState = null;
     els.modalRoot.innerHTML = '';
     setHidden(els.modalRoot, true);
@@ -2239,6 +2243,37 @@
     return '还有 ' + fmtGap(diff);
   }
 
+  // 实时北京时间（毫秒）：北京没有夏令时，直接按 UTC+8 算，不依赖系统时区设置。
+  function bjParts(ms) {
+    var d = new Date((typeof ms === 'number' ? ms : Date.now()) + 28800000);
+    return {
+      hour: d.getUTCHours(),
+      minute: d.getUTCMinutes(),
+      second: d.getUTCSeconds(),
+      ms: d.getUTCMilliseconds()
+    };
+  }
+
+  function three(n) {
+    return n < 10 ? '00' + n : (n < 100 ? '0' + n : String(n));
+  }
+
+  function bjClockMs(ms) {
+    var t = bjParts(ms);
+    return two(t.hour) + ':' + two(t.minute) + ':' + two(t.second) + '.' + three(t.ms);
+  }
+
+  // 任务列表的倒计时：精确到秒的 时:分:秒（「还有 15:26:03」）。毫秒交给右边的实时时钟，
+  // 倒计时再带毫秒就太长了，一行放不下。
+  function countdownPrecise(date) {
+    var left = date.getTime() - Date.now();
+    if (left <= 0) return '即将开始';
+    var h = Math.floor(left / 3600000);
+    var m = Math.floor((left % 3600000) / 60000);
+    var s = Math.floor((left % 60000) / 1000);
+    return '还有 ' + two(h) + ':' + two(m) + ':' + two(s);
+  }
+
   // 选项组：定时解锁的几个弹窗共用（随机解锁那个弹窗有自己的闭包版本，不动它）
   function optGroupHtml(key, label, items, activeIdx) {
     var h = ['<div class="opt-group" data-key="' + key + '">'];
@@ -2431,8 +2466,9 @@
     if (typeof job.minGap === 'number' && typeof job.maxGap === 'number') {
       bits.push((!job.minGap && !job.maxGap) ? '立刻解锁' : '间隔 ' + fmtGap(job.minGap) + '–' + fmtGap(job.maxGap));
     }
-    if (phase === 'waiting') bits.push(countdownText(d));
+    if (phase === 'waiting') bits.push(countdownPrecise(d));
     else if (phase === 'heating') bits.push('准备中');
+    // 倒计时后面接的是实时北京时间（毫秒），由 refreshScheduleClocks 每 50ms 单独刷新。
     else if (phase === 'overdue') bits.push('等待结果…');
     return bits.join(' · ');
   }
@@ -2451,7 +2487,13 @@
     var h = ['<div class="sch-job">'];
     h.push('<div class="sch-job__main">');
     h.push('<span class="sch-job__name">' + esc(job.gameName || ('App ' + job.appId)) + '</span>');
-    h.push('<span class="sch-job__meta" data-meta="' + esc(job.id) + '">' + esc(jobMetaText(job)) + '</span>');
+    // 第二行：任务信息 + 实时北京时间（精确到毫秒）。定时解锁是按秒触发的，
+    // 有个跑毫秒的钟才好对表，所以钟就放在原来显示倒计时的位置。
+    h.push('<span class="sch-job__meta">');
+    h.push('<span data-meta="' + esc(job.id) + '">' + esc(jobMetaText(job)) + '</span>');
+    h.push('<span class="sch-job__clock" data-clock="' + esc(job.id) +
+      '" title="北京时间（UTC+8），实时">' + esc('北京时间 ' + bjClockMs()) + '</span>');
+    h.push('</span>');
     h.push('</div>');
     if (phase === 'waiting') {
       h.push('<button type="button" class="btn btn--sm btn--ghost" data-role="run" data-id="' +
@@ -2464,7 +2506,8 @@
     return h.join('');
   }
 
-  // 只刷新 meta 文本，不重建 DOM：重建会打断悬停/焦点，也会让按钮闪一下。
+  // 只刷新文本，不重建 DOM：重建会打断悬停/焦点，也会让按钮闪一下。
+  // meta（倒计时 / 进度）每秒算一次就够；北京时间要显示毫秒，单独按 50ms 刷。
   function refreshScheduleListMeta() {
     if (!modalState || modalState.kind !== 'scheduleList') return;
     var nodes = modalState.el.querySelectorAll('[data-meta]');
@@ -2472,11 +2515,20 @@
       var id = nodes[i].getAttribute('data-meta');
       for (var j = 0; j < state.schedule.jobs.length; j++) {
         if (state.schedule.jobs[j].id === id) {
-          nodes[i].textContent = jobMetaText(state.schedule.jobs[j]);
+          var text = jobMetaText(state.schedule.jobs[j]);
+          if (nodes[i].textContent !== text) nodes[i].textContent = text;
           break;
         }
       }
     }
+  }
+
+  function refreshScheduleClocks() {
+    if (!modalState || modalState.kind !== 'scheduleList') return;
+    var clocks = modalState.el.querySelectorAll('[data-clock]');
+    if (clocks.length === 0) return;
+    var text = '北京时间 ' + bjClockMs();
+    for (var i = 0; i < clocks.length; i++) clocks[i].textContent = text;
   }
 
   function openScheduleListModal() {
@@ -2551,9 +2603,11 @@
     els.modalRoot.innerHTML = '';
     els.modalRoot.appendChild(el);
     setHidden(els.modalRoot, false);
-    modalState = { el: el, prevFocus: prevFocus, kind: 'scheduleList', tick: 0 };
-    // 每秒刷新一次 meta：倒计时、准备中、解锁中 x/y 都靠它保持新鲜。
-    modalState.tick = window.setInterval(refreshScheduleListMeta, 1000);
+    modalState = { el: el, prevFocus: prevFocus, kind: 'scheduleList', tick: 0, clock: 0 };
+    // 250ms 刷新一次 meta：倒计时带秒，得跳得勤一点才像「实时」。
+    modalState.tick = window.setInterval(refreshScheduleListMeta, 250);
+    // 北京时间精确到毫秒，50ms 刷一次：再快屏幕上也是跳着走的，没必要。
+    modalState.clock = window.setInterval(refreshScheduleClocks, 50);
     window.setTimeout(function () {
       var close = el.querySelector('[data-role="close"]');
       if (close && close.focus) close.focus();
@@ -3973,7 +4027,7 @@
   }
 
   window.SAM = {
-    version: '1.9.4',
+    version: '1.9.5',
     handleEvent: handleEvent,
     mock: enterMock,
     getState: function () {
