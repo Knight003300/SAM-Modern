@@ -24,6 +24,12 @@ namespace SAM.Modern
         private const int WsThickFrame = 0x00040000;
         private const int DwmwaWindowCornerPreference = 33;
         private const int DwmwcpRound = 2;
+        private const int DwmwaUseImmersiveDarkMode = 20;
+        private const int DwmwaUseImmersiveDarkModeOld = 19;
+        private const int DwmwaBorderColor = 34;
+        private const int WmEraseBkgnd = 0x0014;
+        private const int WmNcPaint = 0x0085;
+        private const int WmNcActivate = 0x0086;
         private const int CornerRadius = 10;
 
         [DllImport("user32.dll")]
@@ -775,6 +781,25 @@ namespace SAM.Modern
                 this._nativeRounded = DwmSetWindowAttribute(this.Handle, DwmwaWindowCornerPreference, ref preference, sizeof(int)) == 0;
             }
             catch (Exception) { this._nativeRounded = false; }
+
+            // 窗口是自绘的无边框窗，但 DWM 仍然会在窗口外沿画一圈系统边框（WS_THICKFRAME 带来的）。
+            // 系统处于深色模式时，没声明深色支持的应用拿到的是浅色边框：窗口从屏幕外挪回来、
+            // 页面首帧还没送到的那几百毫秒里，用户看到的就是四边一圈白框（实测 #F2F5FC，宽 8px）。
+            // 声明深色 + 把边框色压到界面底色，这一圈就再也看不见了。
+            try
+            {
+                int dark = 1;
+                int hrDark = DwmSetWindowAttribute(this.Handle, DwmwaUseImmersiveDarkMode, ref dark, sizeof(int));
+                if (hrDark != 0)
+                {
+                    hrDark = DwmSetWindowAttribute(this.Handle, DwmwaUseImmersiveDarkModeOld, ref dark, sizeof(int));
+                }
+                int border = BorderColorRef;
+                int hrBorder = DwmSetWindowAttribute(this.Handle, DwmwaBorderColor, ref border, sizeof(int));
+                Log.Write("dwm attrs: dark=" + hrDark + " border=" + hrBorder + " nativeRound=" + this._nativeRounded);
+            }
+            catch (Exception) { }
+
             this.ApplyRoundedRegion();
         }
 
@@ -1177,8 +1202,30 @@ namespace SAM.Modern
             }
         }
 
+        /// <summary>DWMWA_BORDER_COLOR 用的是 COLORREF（0x00BBGGRR），和界面 --line 对齐。</summary>
+        private static int BorderColorRef { get { return 0x00262626; } }
+
         protected override void WndProc(ref Message m)
         {
+            // 兜底：任何情况下都别让系统用 COLOR_WINDOW（浅色）擦背景，
+            // 一律用界面底色填，避免首帧出现浅色闪块。
+            if (m.Msg == WmEraseBkgnd)
+            {
+                try
+                {
+                    using (var graphics = Graphics.FromHdc(m.WParam))
+                    {
+                        using (var brush = new SolidBrush(this.BackColor))
+                        {
+                            graphics.FillRectangle(brush, 0, 0, this.ClientSize.Width, this.ClientSize.Height);
+                        }
+                    }
+                }
+                catch (Exception) { }
+                m.Result = (IntPtr)1;
+                return;
+            }
+
             if (m.Msg == WmGetMinMaxInfo)
             {
                 this.ApplyMaximizedBounds(ref m);
@@ -1197,6 +1244,23 @@ namespace SAM.Modern
                     return;
                 }
                 base.WndProc(ref m);
+                return;
+            }
+
+            // WS_THICKFRAME 是恢复贴边/缩放能力的代价：系统会照常在非客户区画一圈缩放边框
+            // （8px = SM_CXSIZEFRAME 4 + SM_CXPADDEDBORDER 4）。WM_NCCALCSIZE 只改布局矩形，
+            // 挡不住 WM_NCPAINT 的绘制，于是这圈浅色边框会从 Form 的 8px Padding 环里露出来，
+            // 看起来就是切换窗口时四边闪一圈白框。这里直接接管非客户区绘制：不画。
+            if (m.Msg == WmNcPaint)
+            {
+                m.Result = IntPtr.Zero;
+                return;
+            }
+
+            if (m.Msg == WmNcActivate)
+            {
+                // 激活/失活时系统会顺带重画 NC 边框，返回 1 表示“我自己处理了”，别再画。
+                m.Result = (IntPtr)1;
                 return;
             }
 

@@ -43,9 +43,15 @@ foreach ($n in @('index.html','app.css','app.js')) {
   'copied ui\' + $n
 }
 
-# ship the games.xml catalog cache so the first launch does not wait on the network
+# ship the games.xml catalog cache so the first launch does not wait on the network.
+# 只发目录缓存（games.xml）。游戏库列表 owned.txt 和 game-<appId>.json 都是本机账号的数据，
+# 之前 dist 里残留过一批，会跟着 zip 一起发出去 —— 先清干净再拷。
 $cacheDir = Join-Path $dist 'cache'
 New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
+foreach ($stale in @(Get-ChildItem -LiteralPath $cacheDir -File | Where-Object { $_.Name -ne 'games.xml' })) {
+  Remove-Item -LiteralPath $stale.FullName -Force
+  'removed cache\' + $stale.Name
+}
 $buildCache = Join-Path $build 'cache\games.xml'
 if (Test-Path -LiteralPath $buildCache) {
   Copy-Item -LiteralPath $buildCache -Destination (Join-Path $cacheDir 'games.xml') -Force

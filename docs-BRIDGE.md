@@ -78,6 +78,7 @@ Game：
 - 单页应用，`ui/index.html` + `ui/app.css` + `ui/app.js`，纯原生 JS，无构建步骤。
 - 自定义标题栏（frameless），最小化/最大化/关闭按钮放右上角，标题栏可拖动；双击标题栏切换最大化。
 - 窗口虽然无边框，但必须保留系统级缩放/贴边能力：Win+↑/↓、拖到屏幕顶部 Aero Snap、拖动边缘改变大小都要能用（宿主侧通过 `WS_THICKFRAME` + `WM_GETMINMAXINFO` + `WM_NCCALCSIZE` 实现，最大化区域等于显示器工作区、不压任务栏）。
+- 窗口边缘不能出现系统缩放边框：`WS_THICKFRAME` 会让 Windows 在非客户区画一圈 8px 浅色边框（深色系统下是 `#F2F5FC`），而无边框窗的 8px `Padding` 环正好把它露出来，表现为切换窗口时四边闪白框。宿主必须接管 `WM_NCPAINT` / `WM_NCACTIVATE`（直接不画），并用 `DWMWA_USE_IMMERSIVE_DARK_MODE` + `DWMWA_BORDER_COLOR` 把 DWM 边框压到界面底色；`WM_ERASEBKGND` 一律用 `BackColor` 填充，避免首帧浅色闪块。
 - 成就行列表、搜索框、筛选（全部/已解锁/未解锁/稀有）、全选/反选按钮、数字进度条、统计表格可编辑。
 - 视觉 token 固定：间距只用 4/8/12/16/24/32/48，圆角只有 8px 一档，字号 4 档（24/15/13/11），字重只有 400/600。
 - 键盘可用（Esc 关闭弹窗，Ctrl+S 保存，Ctrl+F 聚焦搜索）。
