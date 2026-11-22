@@ -55,6 +55,7 @@ namespace SAM.Modern
         public static string ClaimPath(string id) { return Path.Combine(Root, "job-" + id + ".claim"); }
         public static string ProgressPath(string id) { return Path.Combine(Root, "job-" + id + ".progress"); }
         public static string ResultPath(string id) { return Path.Combine(Root, "job-" + id + ".result"); }
+        public static string DonePath(string id) { return Path.Combine(Root, "job-" + id + ".done"); }
 
         public static string NewId()
         {
@@ -170,6 +171,7 @@ namespace SAM.Modern
             Delete(ClaimPath(id));
             Delete(ProgressPath(id));
             Delete(ResultPath(id));
+            Delete(DonePath(id));
         }
 
         public static void Delete(string path)
@@ -224,6 +226,18 @@ namespace SAM.Modern
                 return File.ReadAllText(path, Encoding.UTF8);
             }
             catch (Exception) { return null; }
+        }
+
+        /// <summary>worker 心跳：刷新认领文件时间，别的窗口据此判断解锁进程还活着。</summary>
+        public static void TouchClaim(string id)
+        {
+            try
+            {
+                string path = ClaimPath(id);
+                if (File.Exists(path) == false) return;
+                File.SetLastWriteTimeUtc(path, DateTime.UtcNow);
+            }
+            catch (Exception) { }
         }
 
         public static void WriteResult(string id, bool ok, int done, int failed, int total, string message)
@@ -315,11 +329,10 @@ namespace SAM.Modern
             {
                 if (this._running.ContainsKey(job.Id))
                 {
-                    var result = ScheduleStore.ReadResult(job.Id);
-                    if (result != null)
+                    var runningResult = ScheduleStore.ReadResult(job.Id);
+                    if (runningResult != null)
                     {
-                        this.Finish(job, result);
-                        changed = true;
+                        if (this.Finish(job, runningResult)) changed = true;
                     }
                     else if (now > job.At + ClaimStaleSeconds + 120 && this.IsStaleClaim(job.Id))
                     {
@@ -329,7 +342,19 @@ namespace SAM.Modern
                     continue;
                 }
 
-                if (now > job.At + LateGraceSeconds)
+                // 解锁进程已经写完结果，但拉起它的窗口可能早就关了（例如在游戏页建任务后返回游戏库，
+                // 游戏页进程退出时把 _running 一起带走了）。以前这里只 continue，结果文件永远没人消费，
+                // 任务就卡在列表里一直显示「进行中」。现在谁先认领完成标记谁负责收尾。
+                // 这一段必须放在「过期」判断之前：跑完的任务哪怕已经过了宽限期，也该按结果收尾，
+                // 而不是报「错过了」。
+                var orphan = ScheduleStore.ReadResult(job.Id);
+                if (orphan != null)
+                {
+                    if (this.Finish(job, orphan)) changed = true;
+                    continue;
+                }
+
+                if (now > job.At + LateGraceSeconds && this.IsStaleClaim(job.Id))
                 {
                     Log.Write("schedule: job expired " + job.Id);
                     ScheduleStore.DeleteJob(job.Id);
@@ -340,13 +365,28 @@ namespace SAM.Modern
 
                 if (now < job.At - LeadSeconds) continue;
 
-                if (ScheduleStore.ReadResult(job.Id) != null) continue;   // 别的进程已经跑完
+                string claimPath = ScheduleStore.ClaimPath(job.Id);
+                bool claimed = File.Exists(claimPath);
 
-                if (this.TryClaim(job.Id) == false) continue;             // 别的进程负责
+                if (claimed && this.IsStaleClaim(job.Id) == false) continue;  // worker 还活着（它定期刷新认领文件）
+
+                if (claimed)
+                {
+                    // 认领文件过期且没有结果：worker 中途挂了。重启第二个 worker 会重复解锁，
+                    // 所以直接判定失败收尾，别让它挂到过期（1 小时）。
+                    // 结果文件的内容是固定的，多个窗口同时写也没关系；谁抢到 .done 谁负责收尾。
+                    Log.Write("schedule: worker lost " + job.Id);
+                    ScheduleStore.WriteResult(job.Id, false, 0, 0, 0, "解锁进程中断了，请重新排一次。");
+                    var lost = ScheduleStore.ReadResult(job.Id);
+                    if (lost != null && this.Finish(job, lost)) changed = true;
+                    continue;
+                }
+
+                if (this.TryClaim(job.Id) == false) continue;             // 别的进程抢先认领了
 
                 if (this.Launch(job) == false)
                 {
-                    ScheduleStore.Delete(ScheduleStore.ClaimPath(job.Id));
+                    ScheduleStore.Delete(claimPath);
                     continue;
                 }
                 this._running[job.Id] = now;
@@ -363,6 +403,12 @@ namespace SAM.Modern
 
             if (changed) this.PublishJobs(true);
             else this.PublishJobs(false);
+        }
+
+        /// <summary>解锁进程是否还活着（认领文件在最近一次心跳内被刷新过）。</summary>
+        public bool IsClaimFresh(string id)
+        {
+            return this.IsStaleClaim(id) == false;
         }
 
         private bool IsStaleClaim(string id)
@@ -420,8 +466,33 @@ namespace SAM.Modern
             }
         }
 
-        private void Finish(ScheduleJob job, Dictionary<string, object> result)
+        /// <summary>
+        /// 认领「完成」：多个窗口进程可能同时看到结果文件，只有第一个建出 .done 的才负责收尾
+        /// （否则会重复弹 Toast、重复发事件）。.done 由 CleanupOrphans 跟着任务一起清掉。
+        /// </summary>
+        private bool TryClaimDone(string id)
         {
+            try
+            {
+                using (var stream = new FileStream(ScheduleStore.DonePath(id), FileMode.CreateNew,
+                           FileAccess.Write, FileShare.None))
+                {
+                    byte[] bytes = Encoding.UTF8.GetBytes(Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture));
+                    stream.Write(bytes, 0, bytes.Length);
+                }
+                return true;
+            }
+            catch (IOException) { return false; }
+            catch (Exception) { return false; }
+        }
+
+        private bool Finish(ScheduleJob job, Dictionary<string, object> result)
+        {
+            if (this.TryClaimDone(job.Id) == false)
+            {
+                this._running.Remove(job.Id);
+                return false;
+            }
             bool ok = JsonParser.GetBool(result, "ok", false);
             int done = (int)JsonParser.GetNumber(result, "done", 0);
             int total = (int)JsonParser.GetNumber(result, "total", 0);
@@ -440,6 +511,7 @@ namespace SAM.Modern
             }
             this._running.Remove(job.Id);
             ScheduleStore.DeleteJob(job.Id);
+            return true;
         }
 
         private void Send(string ev, ScheduleJob job, Dictionary<string, object> result)
@@ -459,19 +531,23 @@ namespace SAM.Modern
             var ids = new StringBuilder();
             foreach (var job in jobs)
             {
-                ids.Append(job.Id).Append(';');
                 b.BeginObject();
                 this.WriteJobFields(b, job);
+                ids.Append(job.Id).Append(':');
                 string progress = ScheduleStore.ReadProgress(job.Id);
                 if (string.IsNullOrEmpty(progress) == false)
                 {
                     var o = JsonParser.ParseObject(progress);
                     if (o != null)
                     {
-                        b.Name("done").Num((long)JsonParser.GetNumber(o, "done", 0));
-                        b.Name("total").Num((long)JsonParser.GetNumber(o, "total", 0));
+                        long done = (long)JsonParser.GetNumber(o, "done", 0);
+                        long total = (long)JsonParser.GetNumber(o, "total", 0);
+                        b.Name("done").Num(done);
+                        b.Name("total").Num(total);
+                        ids.Append(done).Append('/').Append(total);
                     }
                 }
+                ids.Append(';');
                 b.EndObject();
             }
             b.EndArray().EndObject();

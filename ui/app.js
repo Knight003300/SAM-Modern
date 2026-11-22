@@ -1330,6 +1330,10 @@
       return;
     }
     var prev = modalState.prevFocus;
+    if (modalState.tick) {
+      window.clearInterval(modalState.tick);
+      modalState.tick = null;
+    }
     modalState = null;
     els.modalRoot.innerHTML = '';
     setHidden(els.modalRoot, true);
@@ -2334,18 +2338,31 @@
       setHidden(els.scheduleChip, true);
       return;
     }
-    var next = jobs[0];
-    for (var i = 1; i < jobs.length; i++) {
-      if (jobs[i].at && jobs[i].at < next.at) next = jobs[i];
+    // 挑「下一个还没开始的任务」：正在跑的任务时刻已经过去了，拿它当标题会显示一个过期时间。
+    var next = null;
+    var running = 0;
+    for (var i = 0; i < jobs.length; i++) {
+      var job = jobs[i];
+      var phase = jobPhase(job);
+      if (phase === 'running' || phase === 'heating') running++;
+      if (phase === 'waiting' && (next === null || (job.at || 0) < next.at)) next = job;
     }
-    var d = new Date((next.at || 0) * 1000);
     setHidden(els.scheduleChip, false);
     if (els.scheduleChipText) {
-      els.scheduleChipText.textContent = jobs.length === 1
-        ? dayLabel(d) + ' ' + clockShort(d)
-        : jobs.length + ' 个定时 · ' + clockShort(d);
+      if (next) {
+        var d = new Date((next.at || 0) * 1000);
+        els.scheduleChipText.textContent = jobs.length === 1
+          ? dayLabel(d) + ' ' + clockShort(d)
+          : jobs.length + ' 个定时 · ' + clockShort(d);
+      } else {
+        els.scheduleChipText.textContent = running > 0
+          ? (jobs.length === 1 ? '解锁中' : jobs.length + ' 个定时 · 解锁中')
+          : (jobs.length + ' 个定时');
+      }
     }
-    els.scheduleChip.title = jobs.length + ' 个定时解锁任务，最近一个 ' + clockLabel(d) + ' 开始（点击查看）';
+    els.scheduleChip.title = next
+      ? jobs.length + ' 个定时解锁任务，下一个 ' + clockLabel(new Date((next.at || 0) * 1000)) + ' 开始（点击查看）'
+      : jobs.length + ' 个定时解锁任务（点击查看）';
   }
 
   function onScheduleList(ev) {
@@ -2388,24 +2405,78 @@
 
   /* ---------- 任务列表弹窗 ---------- */
 
+  // 任务当前处在哪个阶段：waiting（还没到预热时间）/ heating（已拉起解锁进程，正在连 Steam）/
+  // running（已经开始写成就）/ overdue（到点了却没有进度，多半是解锁进程出了状况）。
+  function jobPhase(job) {
+    if (job.done || job.total) return 'running';
+    var left = Math.floor(((job.at || 0) * 1000 - Date.now()) / 1000);
+    if (left > 45) return 'waiting';
+    if (left > 0) return 'heating';
+    return 'overdue';
+  }
+
   function jobMetaText(job) {
     var d = new Date((job.at || 0) * 1000);
     var bits = [dayLabel(d) + ' ' + clockShort(d)];
     var explicit = job.achievements && job.achievements.length ? job.achievements.length : 0;
-    if (job.done || job.total) {
-      bits.push('进行中 ' + (job.done || 0) + ' / ' + (job.total || 0));
-    } else if (explicit > 0) {
-      bits.push('指定 ' + explicit + ' 个');
-    } else if (job.count > 0) {
-      bits.push('解锁 ' + job.count + ' 个');
+    var phase = jobPhase(job);
+    // 已经开始解锁（有进度）就不该再显示倒计时，否则会同时出现「解锁中 1 / 1 · 即将开始」。
+    if (phase === 'running') {
+      bits.push('解锁中 ' + (job.done || 0) + ' / ' + (job.total || 0));
     } else {
-      bits.push('全部剩余');
+      if (explicit > 0) bits.push('指定 ' + explicit + ' 个');
+      else if (job.count > 0) bits.push('解锁 ' + job.count + ' 个');
+      else bits.push('全部剩余');
     }
     if (typeof job.minGap === 'number' && typeof job.maxGap === 'number') {
       bits.push((!job.minGap && !job.maxGap) ? '立刻解锁' : '间隔 ' + fmtGap(job.minGap) + '–' + fmtGap(job.maxGap));
     }
-    bits.push(countdownText(d));
+    if (phase === 'waiting') bits.push(countdownText(d));
+    else if (phase === 'heating') bits.push('准备中');
+    else if (phase === 'overdue') bits.push('等待结果…');
     return bits.join(' · ');
+  }
+
+  // 已经开始的任务不能取消：worker 进程一旦拉起就会自己跑完，删掉任务文件也拦不住它解锁，
+  // 反而会让结果没人收尾。所以在「准备中」阶段就把取消禁掉，并说明原因。
+  function jobLocked(job) {
+    var phase = jobPhase(job);
+    return phase === 'running' || phase === 'heating';
+  }
+
+  // 一行任务：名字 + 实时 meta + 操作按钮。列表每秒重算一次 meta，倒计时/进度才不会僵住。
+  function scheduleJobRowHtml(job) {
+    var locked = jobLocked(job);
+    var phase = jobPhase(job);
+    var h = ['<div class="sch-job">'];
+    h.push('<div class="sch-job__main">');
+    h.push('<span class="sch-job__name">' + esc(job.gameName || ('App ' + job.appId)) + '</span>');
+    h.push('<span class="sch-job__meta" data-meta="' + esc(job.id) + '">' + esc(jobMetaText(job)) + '</span>');
+    h.push('</div>');
+    if (phase === 'waiting') {
+      h.push('<button type="button" class="btn btn--sm btn--ghost" data-role="run" data-id="' +
+        esc(job.id) + '" title="不等原定时刻，现在就拉起解锁进程">立刻开始</button>');
+    }
+    var lockTitle = phase === 'heating' ? '解锁进程已经启动，来不及取消了' : '正在解锁，不能取消';
+    h.push('<button type="button" class="btn btn--sm btn--ghost" data-role="drop" data-id="' + esc(job.id) +
+      '"' + (locked ? ' disabled title="' + lockTitle + '"' : '') + '>取消</button>');
+    h.push('</div>');
+    return h.join('');
+  }
+
+  // 只刷新 meta 文本，不重建 DOM：重建会打断悬停/焦点，也会让按钮闪一下。
+  function refreshScheduleListMeta() {
+    if (!modalState || modalState.kind !== 'scheduleList') return;
+    var nodes = modalState.el.querySelectorAll('[data-meta]');
+    for (var i = 0; i < nodes.length; i++) {
+      var id = nodes[i].getAttribute('data-meta');
+      for (var j = 0; j < state.schedule.jobs.length; j++) {
+        if (state.schedule.jobs[j].id === id) {
+          nodes[i].textContent = jobMetaText(state.schedule.jobs[j]);
+          break;
+        }
+      }
+    }
   }
 
   function openScheduleListModal() {
@@ -2426,18 +2497,8 @@
       parts.push('<p class="modal__text">还没有定时任务。在游戏页点「定时解锁」，或在游戏库点「定时批量解锁」。</p>');
     } else {
       parts.push('<p class="modal__text">到点前请保持本工具和 Steam 都开着。任务在开始前 40 秒拉起解锁进程（先连好 Steam，再等到那一秒），之后可以在任务上取消。</p>');
-      parts.push('<div class="sch-jobs">');
-      for (var i = 0; i < jobs.length; i++) {
-        var job = jobs[i];
-        parts.push('<div class="sch-job">');
-        parts.push('<div class="sch-job__main">');
-        parts.push('<span class="sch-job__name">' + esc(job.gameName || ('App ' + job.appId)) + '</span>');
-        parts.push('<span class="sch-job__meta">' + esc(jobMetaText(job)) + '</span>');
-        parts.push('</div>');
-        parts.push('<button type="button" class="btn btn--sm btn--ghost" data-role="drop" data-id="' +
-          esc(job.id) + '">取消</button>');
-        parts.push('</div>');
-      }
+      parts.push('<div class="sch-jobs" data-role="jobs">');
+      for (var i = 0; i < jobs.length; i++) parts.push(scheduleJobRowHtml(jobs[i]));
       parts.push('</div>');
     }
     parts.push('</div>');
@@ -2452,6 +2513,21 @@
       var role = hit ? hit.getAttribute('data-role') : '';
       if (role === 'close') {
         closeModal();
+        return;
+      }
+      if (role === 'run') {
+        var runId = hit.getAttribute('data-id');
+        if (!runId) return;
+        if (state.mock) {
+          for (var k = 0; k < state.schedule.jobs.length; k++) {
+            if (state.schedule.jobs[k].id === runId) state.schedule.jobs[k].at = Math.floor(Date.now() / 1000);
+          }
+          renderScheduleChip();
+          openScheduleListModal();
+          toast('info', '已开始', '演示模式下不会真的解锁。');
+          return;
+        }
+        send('schedule/run', { id: runId });
         return;
       }
       if (role === 'drop') {
@@ -2475,7 +2551,9 @@
     els.modalRoot.innerHTML = '';
     els.modalRoot.appendChild(el);
     setHidden(els.modalRoot, false);
-    modalState = { el: el, prevFocus: prevFocus, kind: 'scheduleList' };
+    modalState = { el: el, prevFocus: prevFocus, kind: 'scheduleList', tick: 0 };
+    // 每秒刷新一次 meta：倒计时、准备中、解锁中 x/y 都靠它保持新鲜。
+    modalState.tick = window.setInterval(refreshScheduleListMeta, 1000);
     window.setTimeout(function () {
       var close = el.querySelector('[data-role="close"]');
       if (close && close.focus) close.focus();
@@ -3895,7 +3973,7 @@
   }
 
   window.SAM = {
-    version: '1.9.3',
+    version: '1.9.4',
     handleEvent: handleEvent,
     mock: enterMock,
     getState: function () {

@@ -1197,6 +1197,11 @@ namespace SAM.Modern
                 this.CancelSchedule(message);
                 return;
             }
+            if (string.Equals(cmd, "schedule/run", StringComparison.Ordinal))
+            {
+                this.RunScheduleNow(message);
+                return;
+            }
             if (string.Equals(cmd, "schedule/pool", StringComparison.Ordinal))
             {
                 this.SendSchedulePool(message);
@@ -1381,6 +1386,46 @@ namespace SAM.Modern
             ScheduleStore.DeleteJob(id);
             Log.Write("schedule: cancelled " + id);
             this.Channel.Toast("success", "已取消定时", "这条定时解锁任务已删除。");
+            if (this._scheduler != null) this._scheduler.Publish();
+        }
+
+        /// <summary>
+        /// 「立刻开始」：把任务的时刻改成现在，调度器下一拍就会拉起 worker。
+        /// 任务已经开始（认领文件还新鲜）时不动它，避免起第二个进程重复解锁。
+        /// </summary>
+        private void RunScheduleNow(Dictionary<string, object> message)
+        {
+            string id = JsonParser.GetString(message, "id");
+            if (string.IsNullOrEmpty(id))
+            {
+                this.Channel.Toast("warn", "无法开始", "没有指定要开始的任务。");
+                return;
+            }
+            var job = ScheduleStore.LoadJob(ScheduleStore.JobPath(id));
+            if (job == null)
+            {
+                this.Channel.Toast("warn", "任务不在了", "这条定时任务已经结束或被取消了。");
+                if (this._scheduler != null) this._scheduler.Publish();
+                return;
+            }
+            if (this._scheduler != null && this._scheduler.IsClaimFresh(id))
+            {
+                this.Channel.Toast("info", "正在解锁", "这条任务已经开始了，不用再点一次。");
+                return;
+            }
+            // 上一次尝试留下的认领 / 结果 / 进度都清掉，否则调度器会拿旧结果直接收尾。
+            ScheduleStore.Delete(ScheduleStore.ClaimPath(id));
+            ScheduleStore.Delete(ScheduleStore.ResultPath(id));
+            ScheduleStore.Delete(ScheduleStore.ProgressPath(id));
+            ScheduleStore.Delete(ScheduleStore.DonePath(id));
+            job.At = ScheduleStore.Now();
+            if (ScheduleStore.SaveJob(job) == false)
+            {
+                this.Channel.Toast("error", "无法开始", "任务文件写入失败，请重试。");
+                return;
+            }
+            Log.Write("schedule: run now " + id);
+            this.Channel.Toast("success", "已开始解锁", "《" + job.GameName + "》正在解锁，进度可以在任务列表里看。");
             if (this._scheduler != null) this._scheduler.Publish();
         }
 

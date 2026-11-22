@@ -82,10 +82,18 @@ namespace SAM.Modern
             }
 
             // 等到目标时刻（毫秒级对齐）：最后 10ms 才细睡，避免长时间空转。
+            long lastBeat = ScheduleStore.NowMs();
             while (true)
             {
-                long remain = targetMs - ScheduleStore.NowMs();
+                long nowMs = ScheduleStore.NowMs();
+                long remain = targetMs - nowMs;
                 if (remain <= 0) break;
+                // 心跳：每 10 秒刷新一次认领文件，调度器据此区分「worker 还在预热」和「worker 挂了」。
+                if (nowMs - lastBeat >= 10000)
+                {
+                    lastBeat = nowMs;
+                    ScheduleStore.TouchClaim(job.Id);
+                }
                 Thread.Sleep((int)Math.Min(remain, 10));
             }
             Log.Write("schedule worker: reached target nowMs=" + ScheduleStore.NowMs() + " driftMs=" +
@@ -103,7 +111,15 @@ namespace SAM.Modern
                 {
                     int gap = random.Next(job.MinGap, job.MaxGap + 1);
                     ScheduleStore.WriteProgress(job.Id, done, ids.Count, ids[i], target);
-                    Thread.Sleep(gap * 1000);
+                    long sleepMs = gap * 1000L;
+                    long slept = 0;
+                    while (slept < sleepMs)
+                    {
+                        int slice = (int)Math.Min(10000, sleepMs - slept);
+                        Thread.Sleep(slice);
+                        slept += slice;
+                        ScheduleStore.TouchClaim(job.Id);
+                    }
                 }
 
                 bool ok;
