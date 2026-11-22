@@ -507,6 +507,13 @@ namespace SAM.Modern
                 .Name("maxGap").Num(job.MaxGap)
                 .Name("rareOnly").Bool(job.RareOnly)
                 .Name("rarePct").Num(job.RarePct);
+            // 点名解锁时前端要知道这条任务指定了哪些成就（列表里显示「指定 N 个」）
+            if (job.Achievements != null && job.Achievements.Count > 0)
+            {
+                b.Name("achievements").BeginArray();
+                foreach (string id in job.Achievements) b.Str(id);
+                b.EndArray();
+            }
         }
     }
 }

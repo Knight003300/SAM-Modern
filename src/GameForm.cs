@@ -336,7 +336,7 @@ namespace SAM.Modern
             string json = b.ToString();
             this.Channel.Send(json);
             this.SaveGameCache(json);
-            this.Channel.Status("已获取 " + this._definitions.Count + " 个成就、"
+            this.Channel.Status("已载入 " + this._definitions.Count + " 个成就、"
                 + this._statDefinitions.Count + " 项统计。", false);
         }
 
@@ -519,45 +519,88 @@ namespace SAM.Modern
             if (delay > 3600) delay = 3600;
             if (rarePct <= 0 || rarePct > 100) rarePct = DefaultRarePercent;
 
+            // 前端可以点名要解锁哪些成就（「指定成就」模式）。点名时按给定顺序执行，
+            // 既不按数量截断，也不做稀有度过滤 —— 用户已经自己挑好了。
+            var explicitIds = new List<string>();
+            object rawExplicit;
+            if (message.TryGetValue("achievements", out rawExplicit))
+            {
+                var items = rawExplicit as List<object>;
+                if (items != null)
+                {
+                    foreach (object item in items)
+                    {
+                        string id = item as string;
+                        if (string.IsNullOrEmpty(id) == false && explicitIds.Contains(id) == false)
+                        {
+                            explicitIds.Add(id);
+                        }
+                    }
+                }
+            }
+
             var api = this._host.Client.SteamUserStats;
             var candidates = new List<string>();
-            foreach (var def in this._definitions)
+            if (explicitIds.Count > 0)
             {
-                if ((def.Permission & 3) != 0) continue;
-                if (rareOnly && this.IsRare(def.Id, rarePct) == false) continue;
-                bool current = false;
-                try { if (api.GetAchievement(def.Id, out current) == false) continue; }
-                catch (Exception error) { Log.Write("GetAchievement failed: " + def.Id, error); continue; }
-                if (current) continue;
-                candidates.Add(def.Id);
-            }
-
-            if (candidates.Count == 0)
-            {
-                if (rareOnly)
+                foreach (string id in explicitIds)
                 {
-                    this.Channel.Toast("info", "没有可解锁的稀有成就",
-                        "稀有成就（全服解锁率低于 " + FormatPercent(rarePct) + "）都已经解锁了，"
-                        + "或者这个游戏没有稀有成就。");
+                    AchievementDef def;
+                    if (this._definitionById.TryGetValue(id, out def) == false) continue;
+                    if ((def.Permission & 3) != 0) continue;
+                    bool current = false;
+                    try { if (api.GetAchievement(id, out current) == false) continue; }
+                    catch (Exception error) { Log.Write("GetAchievement failed: " + id, error); continue; }
+                    if (current) continue;
+                    candidates.Add(id);
                 }
-                else
+                if (candidates.Count == 0)
                 {
-                    this.Channel.Toast("info", "没有可解锁的成就", "该游戏所有可修改的成就都已经解锁了。");
+                    this.Channel.Toast("info", "这些成就都不能解锁",
+                        "选中的成就都已经解锁了，或者属于受保护的成就。");
+                    return;
                 }
-                return;
             }
+            else
+            {
+                foreach (var def in this._definitions)
+                {
+                    if ((def.Permission & 3) != 0) continue;
+                    if (rareOnly && this.IsRare(def.Id, rarePct) == false) continue;
+                    bool current = false;
+                    try { if (api.GetAchievement(def.Id, out current) == false) continue; }
+                    catch (Exception error) { Log.Write("GetAchievement failed: " + def.Id, error); continue; }
+                    if (current) continue;
+                    candidates.Add(def.Id);
+                }
 
-            // 顺序也打乱，看起来才像「随机」
-            for (int i = candidates.Count - 1; i > 0; i--)
-            {
-                int j = this._unlockRandom.Next(i + 1);
-                string tmp = candidates[i];
-                candidates[i] = candidates[j];
-                candidates[j] = tmp;
-            }
-            if (count > 0 && count < candidates.Count)
-            {
-                candidates.RemoveRange(count, candidates.Count - count);
+                if (candidates.Count == 0)
+                {
+                    if (rareOnly)
+                    {
+                        this.Channel.Toast("info", "没有可解锁的稀有成就",
+                            "稀有成就（全服解锁率低于 " + FormatPercent(rarePct) + "）都已经解锁了，"
+                            + "或者这个游戏没有稀有成就。");
+                    }
+                    else
+                    {
+                        this.Channel.Toast("info", "没有可解锁的成就", "该游戏所有可修改的成就都已经解锁了。");
+                    }
+                    return;
+                }
+
+                // 顺序也打乱，看起来才像「随机」
+                for (int i = candidates.Count - 1; i > 0; i--)
+                {
+                    int j = this._unlockRandom.Next(i + 1);
+                    string tmp = candidates[i];
+                    candidates[i] = candidates[j];
+                    candidates[j] = tmp;
+                }
+                if (count > 0 && count < candidates.Count)
+                {
+                    candidates.RemoveRange(count, candidates.Count - count);
+                }
             }
 
             this._unlockQueue.Clear();
@@ -567,13 +610,15 @@ namespace SAM.Modern
             this._unlockMaxGap = maxGap;
             this._unlockRunning = true;
 
-            Log.Write("random unlock start: " + this._unlockQueue.Count + " achievements, gap "
-                + minGap + "-" + maxGap + "s, first delay " + delay + "s"
+            Log.Write("random unlock start: " + this._unlockQueue.Count + " achievements"
+                + (explicitIds.Count > 0 ? " (explicit " + explicitIds.Count + ")" : "")
+                + ", gap " + minGap + "-" + maxGap + "s, first delay " + delay + "s"
                 + (rareOnly ? ", rare only <" + FormatPercent(rarePct) : ""));
 
             this.SendUnlockRun(delay, null, 0);
-            this.Channel.Status("随机解锁已开始：共 " + this._unlockQueue.Count
-                + (rareOnly ? " 个稀有成就" : " 个成就") + "，间隔 "
+            this.Channel.Status((explicitIds.Count > 0 ? "指定解锁已开始：共 " : "随机解锁已开始：共 ")
+                + this._unlockQueue.Count
+                + (explicitIds.Count > 0 ? " 个指定成就" : (rareOnly ? " 个稀有成就" : " 个成就")) + "，间隔 "
                 + FormatGap(minGap) + " – " + FormatGap(maxGap) + "，"
                 + (delay > 0 ? "约 " + FormatGap(delay) + "后解锁第一个。" : "正在解锁第一个…"), true);
 

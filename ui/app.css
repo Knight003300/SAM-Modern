@@ -1902,6 +1902,61 @@ dt {
   color: var(--text-3);
 }
 
+/* 指定成就：搜索框 + 可滚动的勾选列表（随机解锁 / 定时解锁共用） --------- */
+
+.sch-ach-search {
+  width: 100%;
+  margin-top: var(--s2);
+}
+
+.sch-achs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 196px;
+  margin-top: var(--s2);
+  overflow-y: auto;
+}
+
+.sch-ach {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s1) var(--s2);
+  border-radius: var(--r);
+  cursor: pointer;
+  user-select: none;
+}
+
+.sch-ach:hover {
+  background: var(--bg-3);
+}
+
+.sch-ach__box {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.sch-ach__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--t-body);
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sch-ach__meta {
+  flex: none;
+  font-size: var(--t-micro);
+  color: var(--text-3);
+}
+
 /* 标题栏的定时入口：做成可点按钮，hover 时提亮 */
 .chip--schedule {
   -webkit-app-region: no-drag;
