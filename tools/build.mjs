@@ -86,7 +86,10 @@ if (what === 'api') {
   const icon = path.join(ROOT, 'build', 'sam.ico');
   build({
     out,
-    target: 'exe',
+    // 必须是 winexe（子系统 2）。用 'exe' 编出来是控制台子系统（子系统 3），
+    // 双击运行时 Windows 会额外开一个黑色控制台窗口；关掉那个黑框等于给进程发
+    // CTRL_CLOSE，工具也跟着退出。程序本身不写 stdout，直接按 GUI 程序链接即可。
+    target: 'winexe',
     sources,
     refs: [...standardRefs, ...wv2Refs, apiDll],
     resources: [],
