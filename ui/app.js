@@ -57,6 +57,44 @@
     saving: false
   };
 
+  // 打开过的游戏记下「已解锁 / 总数」，卡片第二行才有东西可显示。
+  // 游戏库和游戏页是两个进程，但共用同一个 WebView2 用户目录和 https://sam.ui 源，
+  // 所以 localStorage 是跨进程共享的 —— 这是唯一不用改主机代码就能把进度带回游戏库的办法。
+  var PROGRESS_KEY = 'sam.progress.v1';
+  var sessionProgress = {};
+
+  function loadProgress() {
+    var next = {};
+    try {
+      var raw = window.localStorage ? window.localStorage.getItem(PROGRESS_KEY) : null;
+      if (raw) {
+        var parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') next = parsed;
+      }
+    } catch (err) {
+      next = {};
+    }
+    var before = JSON.stringify(sessionProgress);
+    var after = JSON.stringify(next);
+    sessionProgress = next;
+    return before !== after;
+  }
+
+  function saveProgress() {
+    try {
+      if (window.localStorage) window.localStorage.setItem(PROGRESS_KEY, JSON.stringify(sessionProgress));
+    } catch (err) { }
+  }
+
+  function recordProgress(appId, total, unlocked) {
+    var key = String(appId);
+    if (!key || key === '0' || !(total > 0)) return;
+    var prev = sessionProgress[key];
+    if (prev && prev.total === total && prev.unlocked === unlocked) return;
+    sessionProgress[key] = { total: total, unlocked: unlocked };
+    saveProgress();
+  }
+
   var els = {};
   var modalState = null;
   var saveGuard = 0;
@@ -114,6 +152,19 @@
     var d = new Date(sec * 1000);
     return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) +
       ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+  }
+
+  // 相对时间只给左栏「最近解锁」用：绝对时间戳在窄栏里又长又难读。
+  function fmtAgo(ts) {
+    var sec = Number(ts);
+    if (!sec || !isFinite(sec) || sec <= 0) return '';
+    var diff = Math.floor(Date.now() / 1000 - sec);
+    if (diff < 0) diff = 0;
+    if (diff < 60) return '刚刚';
+    if (diff < 3600) return Math.floor(diff / 60) + ' 分钟前';
+    if (diff < 86400) return Math.floor(diff / 3600) + ' 小时前';
+    if (diff < 86400 * 30) return Math.floor(diff / 86400) + ' 天前';
+    return fmtTime(sec).slice(0, 10);
   }
 
   function fmtNumber(value, isFloat) {
@@ -482,6 +533,7 @@
         ? ev.summary.unlocked
         : countUnlocked(state.game.achievements)
     };
+    recordProgress(state.game.appId, state.game.summary.total, state.game.summary.unlocked);
     // 缓存快照只是先垫一层内容，Steam 数据马上会再推一次并整表覆盖。
     // 这里必须把 loading 关掉，否则 renderGame 只画转圈、不画列表，缓存就白推了。
     state.game.loading = false;
@@ -720,8 +772,12 @@
 
   function renderSaveButton() {
     var dirty = dirtyCount();
-    setHidden(els.saveBadge, dirty === 0);
+    // 徽标常驻：0 也要显示，否则用户无法一眼确认「现在确实没有未保存改动」。
+    // 0 用弱化色，和「有改动」的强调色区分开。
+    setHidden(els.saveBadge, false);
     els.saveBadge.textContent = String(dirty);
+    if (dirty === 0) els.saveBadge.classList.add('is-idle');
+    else els.saveBadge.classList.remove('is-idle');
     setHidden(els.saveSpinner, !state.saving);
     els.saveLabel.textContent = state.saving ? '保存中…' : '保存改动';
     els.btnSave.disabled = !state.saving && dirty === 0;
@@ -793,6 +849,14 @@
     return '<span class="gtag gtag--' + key + '">' + TYPE_LABEL[key] + '</span>';
   }
 
+  // 卡片第二行：能拿到进度就给进度，拿不到就给 AppID。
+  // 永远返回一句非空文案，否则卡片高度会随数据有无而跳动。
+  function cardMetaText(g) {
+    var p = sessionProgress[String(g.id)];
+    if (p && p.total > 0) return p.unlocked + ' / ' + p.total + ' 成就';
+    return 'AppID ' + g.id;
+  }
+
   function gameCardHtml(g, index) {
     var mono = monogram(g.name);
     var hue = hash32('' + g.id) % 300;
@@ -808,6 +872,7 @@
       ? '<span class="game-card__tags">' + typeTagHtml(g.type) + '</span>'
       : '');
     out.push('<span class="game-card__name">' + esc(g.name) + '</span>');
+    out.push('<span class="game-card__meta">' + esc(cardMetaText(g)) + '</span>');
     out.push('<span class="game-card__hover"></span>');
     out.push('</button>');
     return out.join('');
@@ -1012,12 +1077,25 @@
     els.progRest.textContent = '剩余 ' + (p.total - p.unlocked) + ' 项';
     els.progFill.style.width = (ratio * 100) + '%';
 
-    var d = dirtyCount();
+    // 这三项以前是「成就进度 / 统计项目 / 待保存改动」，分别和上方大数字、
+    // meta 行、右上角保存按钮重复。改成左栏独有的两条：什么时候解锁的、有多少稀有成就。
+    var list = state.game.achievements;
+    var latest = 0;
+    var rareTotal = 0;
+    var rareUnlocked = 0;
+    for (var i = 0; i < list.length; i++) {
+      var a = list[i];
+      if (isRare(a)) rareTotal++;
+      if (!desiredAch(a)) continue;
+      if (isRare(a)) rareUnlocked++;
+      if (a.unlockTime && a.unlockTime > latest) latest = a.unlockTime;
+    }
     els.sideFacts.innerHTML = [
-      '<div><dt>成就进度</dt><dd>' + p.unlocked + ' / ' + p.total + '</dd></div>',
-      '<div><dt>统计项目</dt><dd>' + state.game.stats.length + ' 项</dd></div>',
-      '<div><dt>待保存改动</dt><dd>' + (d > 0 ? d + ' 处' : '无') + '</dd></div>'
+      '<div><dt>最近解锁</dt><dd>' + (latest > 0 ? esc(fmtAgo(latest)) : '—') + '</dd></div>',
+      '<div><dt>稀有成就</dt><dd>' + (rareTotal > 0 ? rareUnlocked + ' / ' + rareTotal : '—') + '</dd></div>'
     ].join('');
+
+    recordProgress(state.game.appId, p.total, p.unlocked);
   }
 
   function renderGame() {
@@ -1502,7 +1580,6 @@
   function openRandomModal(pool) {
     closeModal();
     var list = Array.isArray(pool) ? pool : [];
-    var available = list.length;
     var sel = { count: 0, gap: 1, rare: 0 };
     var el = document.createElement('div');
     el.className = 'modal modal--wide';
@@ -1516,13 +1593,10 @@
     body.push('<h2 class="modal__title">随机时间解锁</h2>');
     body.push('</div>');
     var rarityKnown = list.some(function (a) { return a && typeof a.rarity === 'number' && a.rarity >= 0; });
-    var rareCount = list.filter(isRare).length;
 
-    body.push('<p class="modal__text">Steam 只认“解锁那一刻”的真实时间，不接受伪造的历史时间。' +
-      '所以这里按随机间隔逐个写入，每个成就自然拿到不同的解锁时间。' +
-      '当前有 ' + available + ' 个可解锁成就' +
-      (rarityKnown ? '，其中 ' + rareCount + ' 个全服解锁率低于 ' + RARE_PCT + '%' : '') +
-      '。解锁期间请保持窗口打开。</p>');
+    // 说明只讲结果：解锁几个、大概要等多久、中途能不能停。
+    // 具体数字交给 syncSummary()，按当前选择实时刷新。
+    body.push('<p class="modal__text" data-role="summary"></p>');
 
     function groupHtml(key, label, items) {
       var h = ['<div class="opt-group" data-key="' + key + '">'];
@@ -1602,6 +1676,8 @@
 
     var customBox = el.querySelector('[data-role="customGap"]');
     var gapHint = el.querySelector('[data-role="gapHint"]');
+    var summaryText = el.querySelector('[data-role="summary"]');
+    var okBtn = el.querySelector('[data-role="ok"]');
     var minInputs = [];
     var maxInputs = [];
     for (var pi = 0; pi < GAP_PARTS.length; pi++) {
@@ -1626,27 +1702,74 @@
       if (hi < lo) { var t = lo; lo = hi; hi = t; }
       lo = Math.max(1, Math.min(GAP_MAX_SECONDS, lo));
       hi = Math.max(lo, Math.min(GAP_MAX_SECONDS, hi));
-      return { minGap: lo, maxGap: hi, gapMid: Math.round((lo + hi) / 2) };
+      return { minGap: lo, maxGap: hi };
     }
 
-    function syncCustom() {
-      if (!customBox) return;
-      var isCustom = !!(RANDOM_GAPS[sel.gap] && RANDOM_GAPS[sel.gap].custom);
-      setHidden(customBox, !isCustom);
-      if (!isCustom) return;
-      var lo = readCustom();
-      if (gapHint) {
-        var avail = poolFor(sel.rare).length;
-        var picked = activeCounts()[sel.count] || activeCounts()[0];
-        var n = picked.value > 0 ? Math.min(picked.value, avail) : avail;
-        gapHint.textContent = '每个成就之间随机等 ' + fmtGap(lo.minGap) + ' – ' + fmtGap(lo.maxGap) +
-          '；共 ' + n + ' 个成就，整轮大约需要 ' + fmtGap(n * lo.gapMid) + '。';
+    // 把当前选择换算成一次真实运行：解锁几个、间隔多少、整轮大概多久。
+    // 主机的节奏是「第一个成就先等 delay 秒，之后每个间隔在 [minGap, maxGap] 里随机」，
+    // 所以整轮耗时 = delay + (n - 1) × 间隔，不是 n × 间隔（旧文案按 n × 平均间隔算，多算了一档）。
+    function planFor() {
+      var avail = poolFor(sel.rare).length;
+      var opts = activeCounts();
+      var picked = opts[sel.count] || opts[0];
+      var n = picked.value > 0 ? Math.min(picked.value, avail) : avail;
+      var gap = RANDOM_GAPS[sel.gap] || RANDOM_GAPS[1];
+      var custom = gap.custom ? readCustom() : null;
+      var lo = custom ? custom.minGap : gap.min;
+      var hi = custom ? custom.maxGap : gap.max;
+      var delay = Math.min(5, lo);
+      var totalLow = n > 0 ? delay + (n - 1) * lo : 0;
+      var totalHigh = n > 0 ? delay + (n - 1) * hi : 0;
+      return { avail: avail, n: n, lo: lo, hi: hi, totalLow: totalLow, totalHigh: totalHigh };
+    }
+
+    function durationText(plan) {
+      if (plan.n <= 0) return '';
+      if (plan.totalLow === plan.totalHigh) return fmtGap(plan.totalLow);
+      return fmtGap(plan.totalLow) + ' – ' + fmtGap(plan.totalHigh);
+    }
+
+    // 弹窗里所有随选择变化的东西都走这里：顶部说明、自定义间隔提示、开始按钮文案。
+    // 数量、范围、间隔任意一项改动都会重算，所以说明里的数字永远和实际执行一致。
+    function syncSummary() {
+      var plan = planFor();
+      var gap = RANDOM_GAPS[sel.gap] || RANDOM_GAPS[1];
+      setHidden(customBox, !gap.custom);
+
+      if (gapHint && gap.custom) {
+        gapHint.textContent = '每个成就之间随机等 ' + fmtGap(plan.lo) + ' – ' + fmtGap(plan.hi) + '。';
       }
+
+      if (summaryText) {
+        if (plan.avail <= 0) {
+          summaryText.textContent = '当前范围里没有可解锁的成就。换一个更大的范围试试。';
+        } else {
+          var lines = [];
+          lines.push('将解锁 ' + plan.n + ' 个成就，每两个之间随机等 ' + fmtGap(plan.lo) +
+            (plan.hi > plan.lo ? '到 ' + fmtGap(plan.hi) : '') +
+            '，预计耗时 ' + durationText(plan) + '。');
+          if (rarityKnown) {
+            var pct = (RARE_OPTIONS[sel.rare] || RARE_OPTIONS[0]).pct;
+            if (pct > 0) {
+              lines.push('候选里的 ' + plan.avail + ' 个成就都属于全服解锁率低于 ' + pct + '% 的稀有成就。');
+            } else {
+              var rareInPool = list.filter(isRare).length;
+              if (rareInPool > 0) {
+                lines.push('候选里有 ' + rareInPool + ' 个是全服解锁率低于 ' + RARE_PCT + '% 的稀有成就。');
+              }
+            }
+          }
+          lines.push('过程中可以随时点进度条上的「停止」，已经解锁的成就不会回退。');
+          summaryText.textContent = lines.join('\n');
+        }
+      }
+
+      if (okBtn) okBtn.textContent = plan.n > 0 ? '开始解锁 ' + plan.n + ' 个' : '开始解锁';
     }
 
     if (customBox) {
-      customBox.addEventListener('input', syncCustom);
-      customBox.addEventListener('change', syncCustom);
+      customBox.addEventListener('input', syncSummary);
+      customBox.addEventListener('change', syncSummary);
     }
 
     el.addEventListener('click', function (e) {
@@ -1667,7 +1790,7 @@
           sel.count = 0;
           if (box) box.outerHTML = groupHtml('count', '解锁数量', activeCounts());
         }
-        if (key === 'gap' || key === 'count' || key === 'rare') syncCustom();
+        if (key === 'gap' || key === 'count' || key === 'rare') syncSummary();
         return;
       }
       var hit = e.target.closest ? e.target.closest('[data-role]') : null;
@@ -1706,7 +1829,7 @@
     els.modalRoot.appendChild(el);
     setHidden(els.modalRoot, false);
     modalState = { el: el, prevFocus: prevFocus };
-    syncCustom();
+    syncSummary();
     window.setTimeout(function () {
       var ok = el.querySelector('[data-role="ok"]');
       if (ok && ok.focus) ok.focus();
@@ -2560,6 +2683,7 @@
   }
 
   function boot() {
+    loadProgress();
     cacheEls();
     bindWindowControls();
     bindPicker();
@@ -2567,6 +2691,13 @@
     bindModal();
     bindImageFallback();
     bindKeys();
+
+    // 游戏页是另一个进程：它写进 localStorage 的进度，游戏库这边要等窗口被唤回
+    // 才看得到。这里在窗口重新获得焦点时对比一次，只有真的变了才重画卡片。
+    window.addEventListener('focus', function () {
+      if (state.mode !== 'picker') return;
+      if (loadProgress()) renderPicker();
+    });
 
     var bridge = getBridge();
     if (bridge && typeof bridge.addEventListener === 'function') {
@@ -2596,7 +2727,7 @@
   }
 
   window.SAM = {
-    version: '1.6.1',
+    version: '1.7.0',
     handleEvent: handleEvent,
     mock: enterMock,
     getState: function () {

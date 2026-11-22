@@ -546,6 +546,11 @@ dt {
   display: none;
 }
 
+/* 保存徽标常驻：0 处改动时用弱化色，避免和「有改动」抢注意力。 */
+.badge.is-idle {
+  color: var(--text-3);
+}
+
 /* ---------------------------------------------------------------------------
    3. 主区与视图
    --------------------------------------------------------------------------- */
@@ -649,13 +654,26 @@ dt {
 
 .game-card__name {
   display: block;
-  padding: var(--s2) var(--s3) var(--s3);
+  padding: var(--s2) var(--s3) 0;
   font-size: var(--t-body);
   font-weight: 600;
   color: var(--text-1);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* 卡片第二行：完成度或 AppID。永远是同一行高度，数据缺失也不会让卡片跳动。 */
+.game-card__meta {
+  display: block;
+  padding: var(--s1) var(--s3) var(--s3);
+  font-size: var(--t-micro);
+  letter-spacing: .02em;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
 }
 
 .game-card__hover {
