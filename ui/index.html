@@ -29,6 +29,9 @@
     </div>
 
     <div class="titlebar__meta">
+      <button type="button" class="chip chip--schedule" id="scheduleChip" title="查看定时解锁任务" hidden>
+        <span class="chip__dot"></span><span id="scheduleChipText">定时任务</span>
+      </button>
       <span class="chip chip--mock" id="mockChip" hidden>
         <span class="chip__dot"></span>演示数据
       </span>
@@ -70,6 +73,13 @@
 
       <div class="toolbar__spacer"></div>
 
+      <button type="button" class="btn btn--ghost" id="btnScheduleAll" title="让多个游戏在同一分钟开始解锁">
+        <svg class="btn__ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="10" cy="10" r="6.2" /><path d="M10 6.6V10l2.4 1.5" />
+        </svg>
+        <span>定时批量解锁</span>
+      </button>
+
       <button type="button" class="btn btn--ghost" id="btnReload">
         <svg class="btn__ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M16.2 8.6A6.4 6.4 0 1 0 16 12" /><path d="M16.6 4.6v4.2h-4.2" />
@@ -91,6 +101,13 @@
           <path d="M4 5.6h3.2l5.6 8.8H16" /><path d="M13.4 12.2 16 14.4l-2.6 2.2" /><path d="M4 14.4h3.2l1.9-3" /><path d="M12.1 8.2 13.4 6.4H16" />
         </svg>
         <span class="btn__label" id="randomLabel">随机时间解锁</span>
+      </button>
+
+      <button type="button" class="btn btn--ghost" id="btnSchedule" title="指定某个时刻开始解锁，到点自动执行">
+        <svg class="btn__ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="10" cy="10" r="6.2" /><path d="M10 6.6V10l2.4 1.5" />
+        </svg>
+        <span class="btn__label">定时解锁</span>
       </button>
 
       <div class="toolbar__spacer"></div>

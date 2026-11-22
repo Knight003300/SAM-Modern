@@ -54,7 +54,8 @@
     },
     ui: { tab: 'achievements', query: '', filter: 'all' },
     pending: { ach: {}, stats: {} },
-    saving: false
+    saving: false,
+    schedule: { jobs: [], loaded: false }
   };
 
   // 打开过的游戏记下「已解锁 / 总数」，卡片第二行才有东西可显示。
@@ -304,6 +305,18 @@
         break;
       case 'unlockRun':
         onUnlockRun(ev);
+        break;
+      case 'scheduleList':
+        onScheduleList(ev);
+        break;
+      case 'scheduleStarted':
+        onScheduleEvent(ev, 'started');
+        break;
+      case 'scheduleDone':
+        onScheduleEvent(ev, 'done');
+        break;
+      case 'scheduleMissed':
+        onScheduleEvent(ev, 'missed');
         break;
       case 'mock':
         if (!state.mock) enterMock();
@@ -741,6 +754,7 @@
     els.brandMark.title = state.mode === 'game'
       ? '返回游戏库（Esc 也可返回）'
       : (state.mock ? '返回游戏列表（演示模式）' : 'Steam 成就管理器');
+    renderScheduleChip();
   }
 
   function setActive(container, key, value) {
@@ -805,6 +819,8 @@
       var d = dirtyCount();
       if (d > 0) parts.push('待保存 <b>' + d + '</b>');
     }
+    var sj = state.schedule.jobs || [];
+    if (sj.length > 0) parts.push('定时 <b>' + sj.length + '</b> 个');
     if (state.mock) parts.push('演示模式');
     els.statusMeta.innerHTML = parts.map(function (t) {
       return '<span>' + t + '</span>';
@@ -1961,6 +1977,689 @@
   }
 
   /* ---------------------------------------------------------------------------
+     10.5 定时解锁（指定某一分钟开始，到点自动执行）
+     --------------------------------------------------------------------------- */
+
+  // 常用时刻：观众点名的几个整点 / 叠数时间，点一下直接填进输入框
+  var SCHEDULE_QUICK = ['11:11', '22:22', '00:00', '04:44'];
+
+  // 批量定时里每个游戏解锁多少个：游戏库阶段拿不到各游戏的候选数，只能给固定档位
+  var SCHEDULE_BATCH_COUNTS = [
+    { value: 0, label: '全部剩余' },
+    { value: 5, label: '各 5 个' },
+    { value: 10, label: '各 10 个' },
+    { value: 20, label: '各 20 个' }
+  ];
+
+  function two(n) {
+    return n < 10 ? '0' + n : String(n);
+  }
+
+  function hhmm(hour, minute) {
+    return two(hour) + ':' + two(minute);
+  }
+
+  // 把「时 / 分」换算成下一次出现的绝对时刻：今天已经过了（或只剩不到 1 分钟）就顺延到明天。
+  function nextAt(hour, minute) {
+    var now = new Date();
+    var d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, minute, 0, 0);
+    if (d.getTime() <= now.getTime() + 60000) d = new Date(d.getTime() + 86400000);
+    return d;
+  }
+
+  function dayLabel(date) {
+    var now = new Date();
+    var d0 = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    var d1 = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+    var diff = Math.round((d1 - d0) / 86400000);
+    if (diff === 0) return '今天';
+    if (diff === 1) return '明天';
+    if (diff === 2) return '后天';
+    return two(date.getMonth() + 1) + '-' + two(date.getDate());
+  }
+
+  function clockLabel(date) {
+    return two(date.getMonth() + 1) + '-' + two(date.getDate()) + ' ' + hhmm(date.getHours(), date.getMinutes());
+  }
+
+  function countdownText(date) {
+    var diff = Math.floor((date.getTime() - Date.now()) / 1000);
+    if (diff <= 0) return '即将开始';
+    return '还有 ' + fmtGap(diff);
+  }
+
+  // 选项组：定时解锁的几个弹窗共用（随机解锁那个弹窗有自己的闭包版本，不动它）
+  function optGroupHtml(key, label, items, activeIdx) {
+    var h = ['<div class="opt-group" data-key="' + key + '">'];
+    h.push('<span class="opt-group__label">' + esc(label) + '</span>');
+    h.push('<div class="opt-row">');
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      h.push('<button type="button" class="opt' + (i === activeIdx ? ' is-active' : '') +
+        (it && it.dim ? ' is-dim' : '') + '" data-value="' + i + '">' + esc(it.label) + '</button>');
+    }
+    h.push('</div></div>');
+    return h.join('');
+  }
+
+  function schedPool(list, rareIdx) {
+    var pct = (RARE_OPTIONS[rareIdx] || RARE_OPTIONS[0]).pct;
+    if (!pct) return list;
+    return list.filter(function (a) { return isRareAt(a, pct); });
+  }
+
+  function schedRareItems(list) {
+    var out = [];
+    for (var i = 0; i < RARE_OPTIONS.length; i++) {
+      var n = schedPool(list, i).length;
+      out.push({ label: RARE_OPTIONS[i].label + '（' + n + '）', dim: n === 0 });
+    }
+    return out;
+  }
+
+  // 定时解锁只用三个内置间隔档：自定义四段输入在随机解锁弹窗里已经有入口了
+  function schedGaps() {
+    return RANDOM_GAPS.slice(0, 3);
+  }
+
+  // 时刻输入行：时 / 分两个数字框 + 四个快捷时刻
+  function timeRowHtml(hour, minute) {
+    var h = ['<div class="sch-time">'];
+    h.push('<span class="sch-time__cap">解锁时刻</span>');
+    h.push('<label class="sch-time__field">');
+    h.push('<input class="gap-custom__num" type="number" min="0" max="23" step="1" value="' + hour +
+      '" data-role="hour" aria-label="解锁时刻的小时" />');
+    h.push('<span class="gap-custom__suffix">时</span>');
+    h.push('</label>');
+    h.push('<label class="sch-time__field">');
+    h.push('<input class="gap-custom__num" type="number" min="0" max="59" step="1" value="' + minute +
+      '" data-role="minute" aria-label="解锁时刻的分钟" />');
+    h.push('<span class="gap-custom__suffix">分</span>');
+    h.push('</label>');
+    h.push('</div>');
+    h.push('<div class="sch-quick">');
+    for (var i = 0; i < SCHEDULE_QUICK.length; i++) {
+      h.push('<button type="button" class="opt" data-quick="' + SCHEDULE_QUICK[i] + '">' +
+        SCHEDULE_QUICK[i] + '</button>');
+    }
+    h.push('</div>');
+    return h.join('');
+  }
+
+  // 时刻输入的通用读数 + 收敛：输入框里允许随便打，算的时候夹到合法范围
+  function readClock(hourInput, minuteInput) {
+    var h = Math.floor(Number(hourInput && hourInput.value));
+    var m = Math.floor(Number(minuteInput && minuteInput.value));
+    if (!isFinite(h)) h = 0;
+    if (!isFinite(m)) m = 0;
+    h = Math.max(0, Math.min(23, h));
+    m = Math.max(0, Math.min(59, m));
+    return { hour: h, minute: m };
+  }
+
+  /* ---------- 标题栏的定时任务入口 ---------- */
+
+  function renderScheduleChip() {
+    if (!els.scheduleChip) return;
+    var jobs = state.schedule.jobs || [];
+    if (jobs.length === 0) {
+      setHidden(els.scheduleChip, true);
+      return;
+    }
+    var next = jobs[0];
+    for (var i = 1; i < jobs.length; i++) {
+      if (jobs[i].at && jobs[i].at < next.at) next = jobs[i];
+    }
+    var d = new Date((next.at || 0) * 1000);
+    setHidden(els.scheduleChip, false);
+    if (els.scheduleChipText) {
+      els.scheduleChipText.textContent = jobs.length === 1
+        ? dayLabel(d) + ' ' + hhmm(d.getHours(), d.getMinutes())
+        : jobs.length + ' 个定时 · ' + hhmm(d.getHours(), d.getMinutes());
+    }
+    els.scheduleChip.title = jobs.length + ' 个定时解锁任务，最近一个 ' + clockLabel(d) + ' 开始（点击查看）';
+  }
+
+  function onScheduleList(ev) {
+    state.schedule.jobs = Array.isArray(ev.jobs) ? ev.jobs : [];
+    state.schedule.loaded = true;
+    renderScheduleChip();
+    renderStatus();
+    if (modalState && modalState.kind === 'scheduleList') openScheduleListModal();
+  }
+
+  // started / done / missed 共用：从列表里更新或摘掉对应任务，然后刷新入口
+  function onScheduleEvent(ev, kind) {
+    var job = ev && ev.job ? ev.job : null;
+    if (job && job.id) {
+      var kept = [];
+      var found = false;
+      for (var i = 0; i < state.schedule.jobs.length; i++) {
+        var it = state.schedule.jobs[i];
+        if (it.id !== job.id) {
+          kept.push(it);
+          continue;
+        }
+        found = true;
+        if (kind === 'started') kept.push(job);
+      }
+      if (kind === 'started' && !found) kept.push(job);
+      state.schedule.jobs = kept;
+    }
+    renderScheduleChip();
+    renderStatus();
+    if (modalState && modalState.kind === 'scheduleList') openScheduleListModal();
+  }
+
+  /* ---------- 任务列表弹窗 ---------- */
+
+  function jobMetaText(job) {
+    var d = new Date((job.at || 0) * 1000);
+    var bits = [dayLabel(d) + ' ' + hhmm(d.getHours(), d.getMinutes())];
+    if (job.done || job.total) {
+      bits.push('进行中 ' + (job.done || 0) + ' / ' + (job.total || 0));
+    } else if (job.count > 0) {
+      bits.push('解锁 ' + job.count + ' 个');
+    } else {
+      bits.push('全部剩余');
+    }
+    if (job.minGap && job.maxGap) bits.push('间隔 ' + fmtGap(job.minGap) + '–' + fmtGap(job.maxGap));
+    bits.push(countdownText(d));
+    return bits.join(' · ');
+  }
+
+  function openScheduleListModal() {
+    closeModal();
+    var jobs = (state.schedule.jobs || []).slice();
+    var el = document.createElement('div');
+    el.className = 'modal modal--wide';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'true');
+
+    var parts = [];
+    parts.push('<div class="modal__body">');
+    parts.push('<div class="modal__head">');
+    parts.push('<span class="modal__ico modal__ico--info">' + ICON.info + '</span>');
+    parts.push('<h2 class="modal__title">定时解锁任务</h2>');
+    parts.push('</div>');
+    if (jobs.length === 0) {
+      parts.push('<p class="modal__text">还没有定时任务。在游戏页点「定时解锁」，或在游戏库点「定时批量解锁」。</p>');
+    } else {
+      parts.push('<p class="modal__text">到点前请保持本工具和 Steam 都开着。任务只在开始前 25 秒拉起解锁进程，之后可以在任务上取消。</p>');
+      parts.push('<div class="sch-jobs">');
+      for (var i = 0; i < jobs.length; i++) {
+        var job = jobs[i];
+        parts.push('<div class="sch-job">');
+        parts.push('<div class="sch-job__main">');
+        parts.push('<span class="sch-job__name">' + esc(job.gameName || ('App ' + job.appId)) + '</span>');
+        parts.push('<span class="sch-job__meta">' + esc(jobMetaText(job)) + '</span>');
+        parts.push('</div>');
+        parts.push('<button type="button" class="btn btn--sm btn--ghost" data-role="drop" data-id="' +
+          esc(job.id) + '">取消</button>');
+        parts.push('</div>');
+      }
+      parts.push('</div>');
+    }
+    parts.push('</div>');
+    parts.push('<div class="modal__foot">');
+    parts.push('<button type="button" class="btn btn--primary" data-role="close">关闭</button>');
+    parts.push('</div>');
+    el.innerHTML = parts.join('');
+
+    var prevFocus = document.activeElement;
+    el.addEventListener('click', function (e) {
+      var hit = e.target.closest ? e.target.closest('[data-role]') : null;
+      var role = hit ? hit.getAttribute('data-role') : '';
+      if (role === 'close') {
+        closeModal();
+        return;
+      }
+      if (role === 'drop') {
+        var id = hit.getAttribute('data-id');
+        if (!id) return;
+        if (state.mock) {
+          var kept = [];
+          for (var i = 0; i < state.schedule.jobs.length; i++) {
+            if (state.schedule.jobs[i].id !== id) kept.push(state.schedule.jobs[i]);
+          }
+          state.schedule.jobs = kept;
+          renderScheduleChip();
+          renderStatus();
+          openScheduleListModal();
+          return;
+        }
+        send('schedule/cancel', { id: id });
+      }
+    });
+
+    els.modalRoot.innerHTML = '';
+    els.modalRoot.appendChild(el);
+    setHidden(els.modalRoot, false);
+    modalState = { el: el, prevFocus: prevFocus, kind: 'scheduleList' };
+    window.setTimeout(function () {
+      var close = el.querySelector('[data-role="close"]');
+      if (close && close.focus) close.focus();
+    }, 30);
+  }
+
+  /* ---------- 提交 ---------- */
+
+  function submitSchedule(job) {
+    closeModal();
+    if (state.mock) {
+      job.id = 'mock-' + String(Date.now());
+      state.schedule.jobs = state.schedule.jobs.concat([job]);
+      renderScheduleChip();
+      renderStatus();
+      toast('success', '已排入定时解锁',
+        '《' + job.gameName + '》将在 ' + clockLabel(new Date(job.at * 1000)) + ' 开始解锁。');
+      return;
+    }
+    send('schedule/create', job);
+  }
+
+  /* ---------- 游戏页：给当前游戏定一个时刻 ---------- */
+
+  function onScheduleGame() {
+    if (state.game.loading) return;
+    var pool = randomCandidates();
+    if (pool.length === 0) {
+      toast('info', '没有可解锁的成就', '该游戏所有可修改的成就都已经解锁了。');
+      return;
+    }
+    openScheduleGameModal(pool);
+  }
+
+  function openScheduleGameModal(pool) {
+    closeModal();
+    var list = Array.isArray(pool) ? pool : [];
+    var sel = { count: 0, gap: 1, rare: 0, hour: 22, minute: 22 };
+    var el = document.createElement('div');
+    el.className = 'modal modal--wide';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'true');
+
+    var body = [];
+    body.push('<div class="modal__head">');
+    body.push('<span class="modal__ico modal__ico--info">' + ICON.info + '</span>');
+    body.push('<h2 class="modal__title">定时解锁</h2>');
+    body.push('</div>');
+    body.push('<p class="modal__text" data-role="summary"></p>');
+    body.push('<div class="sch-block">');
+    body.push(timeRowHtml(sel.hour, sel.minute));
+    body.push('<p class="gap-custom__hint" data-role="timeHint"></p>');
+    body.push('</div>');
+    body.push('<div data-role="rareBox">' + optGroupHtml('rare', '解锁范围', schedRareItems(list), 0) + '</div>');
+    body.push('<div data-role="countBox">' + optGroupHtml('count', '解锁数量', countOptions(list.length), 0) + '</div>');
+    body.push(optGroupHtml('gap', '解锁间隔', schedGaps(), 1));
+
+    var parts = [];
+    parts.push('<div class="modal__body">' + body.join('') + '</div>');
+    parts.push('<div class="modal__foot">');
+    parts.push('<button type="button" class="btn btn--ghost" data-role="cancel">取消</button>');
+    parts.push('<button type="button" class="btn btn--primary" data-role="ok">排入定时</button>');
+    parts.push('</div>');
+    el.innerHTML = parts.join('');
+
+    var prevFocus = document.activeElement;
+    var summaryText = el.querySelector('[data-role="summary"]');
+    var timeHint = el.querySelector('[data-role="timeHint"]');
+    var hourInput = el.querySelector('[data-role="hour"]');
+    var minuteInput = el.querySelector('[data-role="minute"]');
+    var okBtn = el.querySelector('[data-role="ok"]');
+
+    function targetDate() {
+      var c = readClock(hourInput, minuteInput);
+      sel.hour = c.hour;
+      sel.minute = c.minute;
+      return nextAt(c.hour, c.minute);
+    }
+
+    function syncAll() {
+      var target = targetDate();
+      var poolNow = schedPool(list, sel.rare);
+      var opts = countOptions(poolNow.length);
+      var picked = opts[sel.count] || opts[0];
+      var n = picked.value > 0 ? Math.min(picked.value, poolNow.length) : poolNow.length;
+      var gaps = schedGaps();
+      var gap = gaps[sel.gap] || gaps[1];
+      var delay = Math.min(5, gap.min);
+      var totalLow = n > 0 ? delay + (n - 1) * gap.min : 0;
+      var totalHigh = n > 0 ? delay + (n - 1) * gap.max : 0;
+      var clock = hhmm(target.getHours(), target.getMinutes());
+
+      if (timeHint) {
+        timeHint.textContent = dayLabel(target) + ' ' + clock + ' 开始（' + countdownText(target) + '）';
+      }
+      var qs = el.querySelectorAll('[data-quick]');
+      for (var qi = 0; qi < qs.length; qi++) {
+        if (qs[qi].getAttribute('data-quick') === hhmm(sel.hour, sel.minute)) qs[qi].classList.add('is-active');
+        else qs[qi].classList.remove('is-active');
+      }
+
+      if (summaryText) {
+        if (poolNow.length <= 0) {
+          summaryText.textContent = '当前范围里没有可解锁的成就。换一个更大的范围试试。';
+        } else {
+          var lines = [];
+          lines.push('将在 ' + dayLabel(target) + ' ' + clock + ' 开始解锁 ' + n + ' 个成就，每两个之间随机等 ' +
+            fmtGap(gap.min) + (gap.max > gap.min ? '到 ' + fmtGap(gap.max) : '') + '，整轮大约 ' +
+            (totalHigh === totalLow ? fmtGap(totalLow) : fmtGap(totalLow) + ' – ' + fmtGap(totalHigh)) + '。');
+          var pct = (RARE_OPTIONS[sel.rare] || RARE_OPTIONS[0]).pct;
+          if (pct > 0) {
+            lines.push('候选里的 ' + poolNow.length + ' 个成就都属于全服解锁率低于 ' + pct + '% 的稀有成就。');
+          }
+          lines.push('到点前请保持本工具和 Steam 都开着；中途可以在标题栏的定时任务里取消，已经解锁的不会回退。');
+          summaryText.textContent = lines.join('\n');
+        }
+      }
+      if (okBtn) okBtn.textContent = n > 0 ? '排入定时（' + n + ' 个）' : '排入定时';
+    }
+
+    if (hourInput) hourInput.addEventListener('input', syncAll);
+    if (hourInput) hourInput.addEventListener('change', syncAll);
+    if (minuteInput) minuteInput.addEventListener('input', syncAll);
+    if (minuteInput) minuteInput.addEventListener('change', syncAll);
+
+    el.addEventListener('click', function (e) {
+      var quick = e.target.closest ? e.target.closest('[data-quick]') : null;
+      if (quick) {
+        var vs = String(quick.getAttribute('data-quick')).split(':');
+        var h = Math.floor(Number(vs[0]));
+        var m = Math.floor(Number(vs[1]));
+        if (hourInput) hourInput.value = String(isFinite(h) ? h : 0);
+        if (minuteInput) minuteInput.value = String(isFinite(m) ? m : 0);
+        syncAll();
+        return;
+      }
+      var opt = e.target.closest ? e.target.closest('.opt') : null;
+      if (opt) {
+        var g = opt.closest('.opt-group');
+        if (!g) return;
+        var key = g.getAttribute('data-key');
+        sel[key] = Number(opt.getAttribute('data-value')) || 0;
+        var btns = g.querySelectorAll('.opt');
+        for (var i = 0; i < btns.length; i++) {
+          if (btns[i] === opt) btns[i].classList.add('is-active');
+          else btns[i].classList.remove('is-active');
+        }
+        if (key === 'rare') {
+          sel.count = 0;
+          var box = el.querySelector('[data-role="countBox"]');
+          if (box) box.innerHTML = optGroupHtml('count', '解锁数量', countOptions(schedPool(list, sel.rare).length), 0);
+        }
+        syncAll();
+        return;
+      }
+      var hit = e.target.closest ? e.target.closest('[data-role]') : null;
+      var role = hit ? hit.getAttribute('data-role') : '';
+      if (role === 'cancel') {
+        closeModal();
+        return;
+      }
+      if (role === 'ok') {
+        var poolNow = schedPool(list, sel.rare);
+        if (poolNow.length <= 0) {
+          toast('info', '这个范围没有可解锁的成就', '换个更大的范围吧，当前范围里没有满足条件的成就。');
+          return;
+        }
+        var target = targetDate();
+        var opts = countOptions(poolNow.length);
+        var entry = opts[sel.count] || opts[0];
+        var gaps = schedGaps();
+        var gap = gaps[sel.gap] || gaps[1];
+        var pct = (RARE_OPTIONS[sel.rare] || RARE_OPTIONS[0]).pct;
+        submitSchedule({
+          appId: state.game.appId,
+          gameName: state.game.name || ('App ' + state.game.appId),
+          at: Math.floor(target.getTime() / 1000),
+          count: entry.value,
+          minGap: gap.min,
+          maxGap: gap.max,
+          rareOnly: pct > 0,
+          rarePct: pct > 0 ? pct : RARE_PCT,
+          language: state.meta.language || 'english'
+        });
+      }
+    });
+
+    els.modalRoot.innerHTML = '';
+    els.modalRoot.appendChild(el);
+    setHidden(els.modalRoot, false);
+    modalState = { el: el, prevFocus: prevFocus, kind: 'scheduleGame' };
+    syncAll();
+    window.setTimeout(function () {
+      if (okBtn && okBtn.focus) okBtn.focus();
+    }, 30);
+  }
+
+  /* ---------- 游戏库：多个游戏同一分钟 ---------- */
+
+  function onScheduleBatch() {
+    var games = state.picker.games;
+    if (!games || games.length === 0) {
+      toast('info', '还没有可选的游戏', '等游戏库扫描完成后再试。');
+      return;
+    }
+    openScheduleBatchModal(games);
+  }
+
+  function openScheduleBatchModal(games) {
+    closeModal();
+    var sel = { count: 0, gap: 1, hour: 22, minute: 22 };
+    var el = document.createElement('div');
+    el.className = 'modal modal--wide';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'true');
+
+    var body = [];
+    body.push('<div class="modal__head">');
+    body.push('<span class="modal__ico modal__ico--info">' + ICON.info + '</span>');
+    body.push('<h2 class="modal__title">定时批量解锁</h2>');
+    body.push('</div>');
+    body.push('<p class="modal__text" data-role="summary"></p>');
+    body.push('<div class="sch-block">');
+    body.push(timeRowHtml(sel.hour, sel.minute));
+    body.push('<p class="gap-custom__hint" data-role="timeHint"></p>');
+    body.push('</div>');
+
+    body.push('<div class="sch-block">');
+    body.push('<div class="sch-block__head">');
+    body.push('<span class="opt-group__label">选择游戏（<span data-role="picked">0</span> / ' + games.length + '）</span>');
+    body.push('<span class="sch-block__acts">');
+    body.push('<button type="button" class="opt" data-role="all">全选</button>');
+    body.push('<button type="button" class="opt" data-role="none">清空</button>');
+    body.push('</span>');
+    body.push('</div>');
+    body.push('<div class="sch-games" data-role="games">');
+    for (var i = 0; i < games.length; i++) {
+      var g = games[i];
+      body.push('<label class="sch-game">');
+      body.push('<input class="sch-game__box" type="checkbox" data-id="' + num(g.id, 0) + '" />');
+      body.push('<span class="sch-game__name">' + esc(g.name || ('App ' + g.id)) + '</span>');
+      body.push('<span class="sch-game__meta">' + esc(TYPE_LABEL[g.type] || '') + '</span>');
+      body.push('</label>');
+    }
+    body.push('</div>');
+    body.push('</div>');
+
+    body.push(optGroupHtml('count', '每个游戏解锁', SCHEDULE_BATCH_COUNTS, 0));
+    body.push(optGroupHtml('gap', '解锁间隔', schedGaps(), 1));
+
+    var parts = [];
+    parts.push('<div class="modal__body">' + body.join('') + '</div>');
+    parts.push('<div class="modal__foot">');
+    parts.push('<button type="button" class="btn btn--ghost" data-role="cancel">取消</button>');
+    parts.push('<button type="button" class="btn btn--primary" data-role="ok">排入定时</button>');
+    parts.push('</div>');
+    el.innerHTML = parts.join('');
+
+    var prevFocus = document.activeElement;
+    var summaryText = el.querySelector('[data-role="summary"]');
+    var timeHint = el.querySelector('[data-role="timeHint"]');
+    var hourInput = el.querySelector('[data-role="hour"]');
+    var minuteInput = el.querySelector('[data-role="minute"]');
+    var pickedEl = el.querySelector('[data-role="picked"]');
+    var gamesBox = el.querySelector('[data-role="games"]');
+    var okBtn = el.querySelector('[data-role="ok"]');
+
+    function targetDate() {
+      var c = readClock(hourInput, minuteInput);
+      sel.hour = c.hour;
+      sel.minute = c.minute;
+      return nextAt(c.hour, c.minute);
+    }
+
+    function pickedIds() {
+      var out = [];
+      if (!gamesBox) return out;
+      var boxes = gamesBox.querySelectorAll('.sch-game__box');
+      for (var i = 0; i < boxes.length; i++) {
+        if (!boxes[i].checked) continue;
+        var id = Number(boxes[i].getAttribute('data-id'));
+        if (isFinite(id) && id > 0) out.push(id);
+      }
+      return out;
+    }
+
+    function syncAll() {
+      var target = targetDate();
+      var ids = pickedIds();
+      var gaps = schedGaps();
+      var gap = gaps[sel.gap] || gaps[1];
+      var countOpt = SCHEDULE_BATCH_COUNTS[sel.count] || SCHEDULE_BATCH_COUNTS[0];
+      var clock = hhmm(target.getHours(), target.getMinutes());
+
+      if (pickedEl) pickedEl.textContent = String(ids.length);
+      if (timeHint) {
+        timeHint.textContent = dayLabel(target) + ' ' + clock + ' 开始（' + countdownText(target) + '）';
+      }
+      var qs = el.querySelectorAll('[data-quick]');
+      for (var qi = 0; qi < qs.length; qi++) {
+        if (qs[qi].getAttribute('data-quick') === hhmm(sel.hour, sel.minute)) qs[qi].classList.add('is-active');
+        else qs[qi].classList.remove('is-active');
+      }
+      if (summaryText) {
+        if (ids.length === 0) {
+          summaryText.textContent = '先在下面选好游戏，再定一个开始时刻。到点后每个游戏都会单独拉起一个解锁进程，互不影响。';
+        } else {
+          var lines = [];
+          lines.push('将在 ' + dayLabel(target) + ' ' + clock + ' 为 ' + ids.length + ' 个游戏开始解锁：每个游戏' +
+            (countOpt.value > 0 ? '解锁 ' + countOpt.value + ' 个成就' : '解锁全部剩余成就') + '，' +
+            '每两个之间随机等 ' + fmtGap(gap.min) + (gap.max > gap.min ? '到 ' + fmtGap(gap.max) : '') + '。');
+          lines.push('到点前请保持本工具和 Steam 都开着；中途可以在标题栏的定时任务里逐个取消，已经解锁的不会回退。');
+          summaryText.textContent = lines.join('\n');
+        }
+      }
+      if (okBtn) okBtn.textContent = ids.length > 0 ? '排入定时（' + ids.length + ' 个游戏）' : '排入定时';
+    }
+
+    if (hourInput) hourInput.addEventListener('input', syncAll);
+    if (hourInput) hourInput.addEventListener('change', syncAll);
+    if (minuteInput) minuteInput.addEventListener('input', syncAll);
+    if (minuteInput) minuteInput.addEventListener('change', syncAll);
+    if (gamesBox) gamesBox.addEventListener('change', syncAll);
+
+    el.addEventListener('click', function (e) {
+      var quick = e.target.closest ? e.target.closest('[data-quick]') : null;
+      if (quick) {
+        var vs = String(quick.getAttribute('data-quick')).split(':');
+        var h = Math.floor(Number(vs[0]));
+        var m = Math.floor(Number(vs[1]));
+        if (hourInput) hourInput.value = String(isFinite(h) ? h : 0);
+        if (minuteInput) minuteInput.value = String(isFinite(m) ? m : 0);
+        syncAll();
+        return;
+      }
+      var roleHit = e.target.closest ? e.target.closest('[data-role]') : null;
+      var role = roleHit ? roleHit.getAttribute('data-role') : '';
+      if (role === 'cancel') {
+        closeModal();
+        return;
+      }
+      if (role === 'all' || role === 'none') {
+        if (gamesBox) {
+          var boxes = gamesBox.querySelectorAll('.sch-game__box');
+          for (var i = 0; i < boxes.length; i++) boxes[i].checked = (role === 'all');
+        }
+        syncAll();
+        return;
+      }
+      var opt = e.target.closest ? e.target.closest('.opt') : null;
+      if (opt) {
+        var g = opt.closest('.opt-group');
+        if (!g) return;
+        var key = g.getAttribute('data-key');
+        sel[key] = Number(opt.getAttribute('data-value')) || 0;
+        var btns = g.querySelectorAll('.opt');
+        for (var bi = 0; bi < btns.length; bi++) {
+          if (btns[bi] === opt) btns[bi].classList.add('is-active');
+          else btns[bi].classList.remove('is-active');
+        }
+        syncAll();
+        return;
+      }
+      if (role === 'ok') {
+        var ids = pickedIds();
+        if (ids.length === 0) {
+          toast('warn', '还没有选游戏', '先在列表里勾选至少一个游戏。');
+          return;
+        }
+        var target = targetDate();
+        var gaps = schedGaps();
+        var gap = gaps[sel.gap] || gaps[1];
+        var countOpt = SCHEDULE_BATCH_COUNTS[sel.count] || SCHEDULE_BATCH_COUNTS[0];
+        var payload = {
+          at: Math.floor(target.getTime() / 1000),
+          minGap: gap.min,
+          maxGap: gap.max,
+          language: state.meta.language || 'english',
+          games: []
+        };
+        for (var gi = 0; gi < ids.length; gi++) {
+          var gid = ids[gi];
+          var nm = 'App ' + gid;
+          for (var gj = 0; gj < games.length; gj++) {
+            if (num(games[gj].id, 0) === gid) { nm = games[gj].name || nm; break; }
+          }
+          payload.games.push({ appId: gid, gameName: nm, count: countOpt.value, rareOnly: false, rarePct: RARE_PCT });
+        }
+        closeModal();
+        if (state.mock) {
+          var now = payload.at;
+          for (var mi = 0; mi < payload.games.length; mi++) {
+            var mg = payload.games[mi];
+            state.schedule.jobs = state.schedule.jobs.concat([{
+              id: 'mock-' + String(Date.now()) + '-' + String(mi),
+              appId: mg.appId,
+              gameName: mg.gameName,
+              at: now,
+              count: mg.count,
+              minGap: payload.minGap,
+              maxGap: payload.maxGap
+            }]);
+          }
+          renderScheduleChip();
+          renderStatus();
+          toast('success', '已排入定时解锁',
+            payload.games.length + ' 个游戏将在 ' + clockLabel(new Date(now * 1000)) + ' 开始解锁。');
+          return;
+        }
+        send('schedule/createBatch', payload);
+      }
+    });
+
+    els.modalRoot.innerHTML = '';
+    els.modalRoot.appendChild(el);
+    setHidden(els.modalRoot, false);
+    modalState = { el: el, prevFocus: prevFocus, kind: 'scheduleBatch' };
+    syncAll();
+    window.setTimeout(function () {
+      if (okBtn && okBtn.focus) okBtn.focus();
+    }, 30);
+  }
+
+  /* ---------------------------------------------------------------------------
      11. Mock 数据（离线预览用）
      --------------------------------------------------------------------------- */
 
@@ -2275,6 +2974,8 @@
     els.brandMark = document.querySelector('.brand__mark');
     els.mockChip = document.getElementById('mockChip');
     els.userChip = document.getElementById('userChip');
+    els.scheduleChip = document.getElementById('scheduleChip');
+    els.scheduleChipText = document.getElementById('scheduleChipText');
     els.btnMin = document.getElementById('btnMin');
     els.btnMax = document.getElementById('btnMax');
     els.btnClose = document.getElementById('btnClose');
@@ -2284,6 +2985,7 @@
     els.pickerSearch = document.getElementById('pickerSearch');
     els.pickerSearchClear = document.getElementById('pickerSearchClear');
     els.pickerTypeSeg = document.getElementById('pickerTypeSeg');
+    els.btnScheduleAll = document.getElementById('btnScheduleAll');
     els.btnReload = document.getElementById('btnReload');
     els.gameTabs = document.getElementById('gameTabs');
     els.achSearchWrap = document.getElementById('achSearchWrap');
@@ -2316,6 +3018,7 @@
     els.btnReset = document.getElementById('btnReset');
     els.btnRandom = document.getElementById('btnRandom');
     els.randomLabel = document.getElementById('randomLabel');
+    els.btnSchedule = document.getElementById('btnSchedule');
     els.unlockBar = document.getElementById('unlockBar');
     els.unlockBarText = document.getElementById('unlockBarText');
     els.unlockBarFill = document.getElementById('unlockBarFill');
@@ -2352,6 +3055,7 @@
     if (els.btnMin) els.btnMin.addEventListener('click', function () { send('win/minimize'); });
     if (els.btnMax) els.btnMax.addEventListener('click', function () { send('win/maximize'); });
     if (els.btnClose) els.btnClose.addEventListener('click', function () { send('win/close'); });
+    if (els.scheduleChip) els.scheduleChip.addEventListener('click', openScheduleListModal);
 
     var bar = document.getElementById('titlebar');
     if (bar) {
@@ -2457,6 +3161,7 @@
         renderStatus();
       });
     }
+    if (els.btnScheduleAll) els.btnScheduleAll.addEventListener('click', onScheduleBatch);
     if (els.btnReload) els.btnReload.addEventListener('click', onReload);
     if (els.gameGrid) {
       els.gameGrid.addEventListener('click', function (e) {
@@ -2555,6 +3260,7 @@
     if (els.btnRefresh) els.btnRefresh.addEventListener('click', onRefreshGame);
     if (els.btnReset) els.btnReset.addEventListener('click', onReset);
     if (els.btnRandom) els.btnRandom.addEventListener('click', onRandomUnlock);
+    if (els.btnSchedule) els.btnSchedule.addEventListener('click', onScheduleGame);
     if (els.btnUnlockStop) els.btnUnlockStop.addEventListener('click', onStopRandomUnlock);
 
     if (els.statBody) {
@@ -2727,7 +3433,7 @@
   }
 
   window.SAM = {
-    version: '1.8.0',
+    version: '1.9.0',
     handleEvent: handleEvent,
     mock: enterMock,
     getState: function () {

@@ -43,6 +43,13 @@ window.chrome.webview.addEventListener('message', e => handle(e.data));
   「随机时间解锁」进度事件。`active=true` 表示进行中：`done/total` 是已解锁数量，`next` 是距下一个成就的秒数（0 表示已结束），带 `id` 时表示该成就刚刚解锁、`unlockTime` 为读回的 Unix 秒。
   结束时会再发一帧 `active:false`，并用 `finished:true` 或 `cancelled:true` 区分正常完成与用户中止。
 
+### 定时解锁（两种模式都可用）
+- `{ ev:"scheduleList", jobs:[{ id, appId, gameName, at, count, minGap, maxGap, rareOnly, rarePct, done?, total? }] }`
+  当前排队的定时任务（按 `at` 升序）。`at` 是 Unix 秒。`done/total` 只在任务已开始执行时出现。
+  任务签名（id 拼接）没变时不会重发，所以 UI 侧必须缓存上一次的列表，不能假设每次事件都是全量刷新之外的增量。
+- `{ ev:"scheduleStarted"|"scheduleDone"|"scheduleMissed", job:{...}, result:{ ok, done, total, message } }`
+  任务开始执行 / 执行结束 / 已经错过（到点后一小时内没能跑上，任务会被删掉）。UI 据此增删列表并弹 toast。
+
 ## 4. 命令表（JS → C#）
 窗口控制（两种模式都可用）：
 - `{cmd:"win/minimize"}` / `{cmd:"win/maximize"}` / `{cmd:"win/close"}` / `{cmd:"win/drag"}`
@@ -68,6 +75,16 @@ Game：
   `rareOnly=true` 时只挑全服解锁率低于 `rarePct`（默认 5，上限 100）的成就；候选不足会走「没有可解锁的稀有成就」提示。
   每解锁一个都会立刻 `StoreStats()`，Steam 因此为每个成就记下各自的真实时间。进度通过 `unlockRun` 事件推送。
 - `{cmd:"game/unlockRandom/cancel"}`  中止进行中的随机解锁（已解锁的不回滚）
+
+定时解锁（命令在 `WebShell` 基类里，所以游戏库与游戏窗口都能发）：
+- `{cmd:"schedule/create", appId:number, gameName:string, at:number(Unix秒), count:number, minGap:number, maxGap:number, rareOnly?:boolean, rarePct?:number, jitter?:number, language?:string, achievements?:string[]}`
+  排一条定时解锁任务，写入 `<程序目录>\schedule\job-<id>.json`。`count=0` 表示「全部剩余」；`achievements` 非空时按这个显式列表解锁（忽略 `count`/`rareOnly`）。
+  `at` 必须晚于当前时间 2 秒、且不超过一年；`minGap>=1`、`maxGap>=minGap`、`maxGap<=7 天`、`rarePct` 0–100、`jitter` 0–3600 秒，越界值由 C# 侧夹紧。
+- `{cmd:"schedule/createBatch", at:number, minGap:number, maxGap:number, jitter?:number, language?:string, games:[{ appId, gameName, count, rareOnly?, rarePct? }]}`
+  一次排多条任务（多游戏同一分钟开始）。公共字段会补进每个 game 项（只在缺键时补），逐条走与 `schedule/create` 相同的校验与落盘。
+- `{cmd:"schedule/cancel", id:string}`  删掉一条任务（同时删 job / claim / progress / result 文件）
+
+定时任务的执行是**独立隐藏进程**：调度器在 `at - 25s` 时 `Process.Start(自身 exe, "--run-job <job 文件>")`，`UseShellExecute=false`、`CreateNoWindow=true`，该进程不建窗口、不初始化 WebView2，只做 `SetAchievement` + `StoreStats` 并写回 `result-<id>.json`。因此**程序退出后任务不会执行**。
 
 ## 5. Mock 模式
 页面在 `chrome.webview` 不存在、或收到 `{ev:"mock"}` 时，用内置假数据渲染（≥12 个游戏、≥40 个成就、≥15 个统计），保证可以离线预览视觉效果。

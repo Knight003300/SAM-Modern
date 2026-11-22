@@ -1749,6 +1749,173 @@ dt {
   color: var(--text-3);
 }
 
+/* 定时解锁：时刻输入行 / 快捷时刻 / 任务列表 / 批量选游戏 ---------------- */
+
+.sch-block {
+  margin-top: var(--s3);
+  padding: var(--s3);
+  border-radius: var(--r);
+  background: var(--bg-2);
+}
+
+.sch-block__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+}
+
+.sch-block__acts {
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+}
+
+.sch-block__acts .opt {
+  height: 24px;
+  padding: 0 var(--s2);
+  font-size: var(--t-micro);
+}
+
+.sch-time {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+.sch-time__cap {
+  font-size: var(--t-micro);
+  font-weight: 600;
+  letter-spacing: .04em;
+  color: var(--text-3);
+}
+
+.sch-time__field {
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+}
+
+.sch-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s1);
+  margin-top: var(--s2);
+}
+
+.sch-quick .opt {
+  height: 24px;
+  padding: 0 var(--s2);
+  font-size: var(--t-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 任务列表：每行一条，名字占满，取消按钮固定在右侧 */
+.sch-jobs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin-top: var(--s3);
+}
+
+.sch-job {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s2) var(--s3);
+  border-radius: var(--r);
+  background: var(--bg-2);
+}
+
+.sch-job__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.sch-job__name {
+  font-size: var(--t-body);
+  font-weight: 600;
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sch-job__meta {
+  font-size: var(--t-micro);
+  letter-spacing: .02em;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 批量选游戏：列表自己滚，弹窗正文不再长高 */
+.sch-games {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 168px;
+  margin-top: var(--s2);
+  overflow-y: auto;
+}
+
+.sch-game {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s1) var(--s2);
+  border-radius: var(--r);
+  cursor: pointer;
+  user-select: none;
+}
+
+.sch-game:hover {
+  background: var(--bg-3);
+}
+
+.sch-game__box {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.sch-game__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--t-body);
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sch-game__meta {
+  flex: none;
+  font-size: var(--t-micro);
+  color: var(--text-3);
+}
+
+/* 标题栏的定时入口：做成可点按钮，hover 时提亮 */
+.chip--schedule {
+  -webkit-app-region: no-drag;
+  cursor: pointer;
+}
+
+.chip--schedule:hover {
+  color: var(--text-1);
+}
+
+.chip--schedule[hidden] {
+  display: none;
+}
+
 /* ---------------------------------------------------------------------------
    10. 滚动条
    --------------------------------------------------------------------------- */

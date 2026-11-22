@@ -118,6 +118,16 @@ namespace SAM.Modern
                     }
                     continue;
                 }
+                if (string.Equals(arg, "--run-job", StringComparison.OrdinalIgnoreCase))
+                {
+                    // 定时解锁的隐藏 worker：只跑一次解锁然后退出，不建窗口、不初始化 WebView2。
+                    // 必须放在 appId 解析之前，否则 "job-xxx.json" 会被当成应用 ID 解析失败弹窗。
+                    if (i + 1 < args.Length)
+                    {
+                        ScheduleWorker.Run(args[++i]);
+                    }
+                    return;
+                }
                 long parsed;
                 if (long.TryParse(arg, NumberStyles.Integer, CultureInfo.InvariantCulture, out parsed) == false || parsed <= 0)
                 {

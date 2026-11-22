@@ -94,6 +94,7 @@ namespace SAM.Modern
         private readonly string _uiDirectory;
         private CoreWebView2Environment _environment;
         private bool _webReady;
+        private ScheduleDispatcher _scheduler;
 
         public WebShell(string title)
         {
@@ -131,6 +132,9 @@ namespace SAM.Modern
 
             this.Bridge = new Bridge(this.Web);
             this.Bridge.Status("正在启动…", true);
+            // 定时解锁的任务调度器：游戏库和游戏窗口各有一个，靠 .claim 独占文件互斥，
+            // 所以用户同时开着两个窗口也只会有一个进程真正去拉起 worker。
+            this._scheduler = new ScheduleDispatcher(this.Bridge);
 
             if (StartHidden)
             {
@@ -640,6 +644,19 @@ namespace SAM.Modern
 
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
+            try
+            {
+                if (this._scheduler != null)
+                {
+                    this._scheduler.Dispose();
+                    this._scheduler = null;
+                }
+            }
+            catch (Exception error)
+            {
+                Log.Write("schedule: dispose failed", error);
+            }
+
             // 用户直接关掉了游戏窗口（不是返回游戏库）：让待命的游戏库窗口一起退出。
             // 否则游戏库窗口会因为「子进程没了」的兜底逻辑自己冒出来，用户会觉得关不掉。
             if (ParentPid > 0 && this._handedOffToParent == false)
@@ -977,6 +994,15 @@ namespace SAM.Modern
 
             this.Bridge.Flush();
             this.OnPageReady();
+            try
+            {
+                this._scheduler.Start();
+                this._scheduler.Publish();
+            }
+            catch (Exception error)
+            {
+                Log.Write("schedule: start failed", error);
+            }
             this._lastMaximizedReport = false;
             this.BroadcastWindowState();
             this.StartPaintWatch();
@@ -1155,7 +1181,215 @@ namespace SAM.Modern
 
         protected virtual void OnCommand(string cmd, Dictionary<string, object> message)
         {
+            // 定时解锁的建/删任务放在基类：游戏库窗口和游戏窗口都能用（子类末尾都会调 base.OnCommand）。
+            if (string.Equals(cmd, "schedule/create", StringComparison.Ordinal))
+            {
+                this.CreateSchedule(message);
+                return;
+            }
+            if (string.Equals(cmd, "schedule/createBatch", StringComparison.Ordinal))
+            {
+                this.CreateScheduleBatch(message);
+                return;
+            }
+            if (string.Equals(cmd, "schedule/cancel", StringComparison.Ordinal))
+            {
+                this.CancelSchedule(message);
+                return;
+            }
             Log.Write("unhandled command: " + cmd);
+        }
+
+        /// <summary>
+        /// 把一条前端消息翻译成 ScheduleJob 并夹紧数值；不落盘。quiet 为真时不弹提示，
+        /// 供批量建任务复用（一次选上百个游戏，否则会弹上百条 toast）。
+        /// </summary>
+        private ScheduleJob BuildSchedule(Dictionary<string, object> message, bool quiet)
+        {
+            long appId = (long)JsonParser.GetNumber(message, "appId", 0);
+            if (appId <= 0)
+            {
+                if (quiet == false) this.Channel.Toast("warn", "无法定时", "没有有效的游戏 ID。");
+                return null;
+            }
+            long at = (long)JsonParser.GetNumber(message, "at", 0);
+            long now = ScheduleStore.Now();
+            if (at <= now + 2)
+            {
+                if (quiet == false) this.Channel.Toast("warn", "无法定时", "目标时间太近或已经过去了，请换一个更晚的时刻。");
+                return null;
+            }
+            if (at > now + 366L * 24 * 3600)
+            {
+                if (quiet == false) this.Channel.Toast("warn", "无法定时", "目标时间太远了，最多提前一年。");
+                return null;
+            }
+
+            var job = new ScheduleJob();
+            job.Id = ScheduleStore.NewId();
+            job.AppId = appId;
+            job.GameName = JsonParser.GetString(message, "gameName");
+            if (string.IsNullOrEmpty(job.GameName)) job.GameName = "App " + appId;
+            job.At = at;
+            job.MinGap = (int)JsonParser.GetNumber(message, "minGap", 15);
+            job.MaxGap = (int)JsonParser.GetNumber(message, "maxGap", 45);
+            job.Count = (int)JsonParser.GetNumber(message, "count", 0);
+            job.RareOnly = JsonParser.GetBool(message, "rareOnly", false);
+            job.RarePct = JsonParser.GetNumber(message, "rarePct", 5.0);
+            job.Jitter = (int)JsonParser.GetNumber(message, "jitter", 0);
+            job.Language = JsonParser.GetString(message, "language");
+            if (string.IsNullOrEmpty(job.Language)) job.Language = "english";
+            job.CreatedAt = now;
+
+            // 夹紧，防止前端传进离谱值让 worker 睡上好几天。
+            if (job.MinGap < 1) job.MinGap = 1;
+            if (job.MaxGap < job.MinGap) job.MaxGap = job.MinGap;
+            if (job.MaxGap > 7 * 24 * 3600) job.MaxGap = 7 * 24 * 3600;
+            if (job.MinGap > job.MaxGap) job.MinGap = job.MaxGap;
+            if (job.Count < 0) job.Count = 0;
+            if (job.RarePct < 0) job.RarePct = 0;
+            if (job.RarePct > 100) job.RarePct = 100;
+            if (job.Jitter < 0) job.Jitter = 0;
+            if (job.Jitter > 3600) job.Jitter = 3600;
+
+            object rawList;
+            if (message.TryGetValue("achievements", out rawList))
+            {
+                var items = rawList as List<object>;
+                if (items != null)
+                {
+                    foreach (object item in items)
+                    {
+                        string id = item as string;
+                        if (string.IsNullOrEmpty(id) == false && job.Achievements.Contains(id) == false)
+                        {
+                            job.Achievements.Add(id);
+                        }
+                    }
+                }
+            }
+
+            return job;
+        }
+
+        /// <summary>
+        /// 建一条定时任务并落盘。worker 进程在到点前由调度器拉起，本进程不需要保持这个游戏窗口打开。
+        /// 但程序本身必须还在运行（调度器活在窗口进程里），界面文案要写明这一点。
+        /// </summary>
+        private void CreateSchedule(Dictionary<string, object> message)
+        {
+            ScheduleJob job = this.BuildSchedule(message, false);
+            if (job == null) return;
+
+            if (ScheduleStore.SaveJob(job) == false)
+            {
+                this.Channel.Toast("error", "无法定时", "任务文件写入失败，请检查程序目录是否可写。");
+                return;
+            }
+            Log.Write("schedule: created " + job.Id + " appId=" + job.AppId + " at=" + job.At +
+                      " count=" + job.Count + " explicit=" + job.Achievements.Count);
+            this.Channel.Toast("success", "已排入定时解锁",
+                "《" + job.GameName + "》将在 " + FormatScheduleTime(job.At) + " 开始解锁。");
+            if (this._scheduler != null) this._scheduler.Publish();
+        }
+
+        /// <summary>
+        /// 批量建定时任务：多个游戏在同一分钟开始解锁。每个游戏一个独立 worker 进程，
+        /// 因为 Steam 客户端在一个进程里只能绑定一个 appId（换了会报 appID mismatch）。
+        /// 参数为公共的 at/minGap/maxGap/jitter，games 是 [{appId,gameName,count,rareOnly,rarePct}]。
+        /// </summary>
+        private void CreateScheduleBatch(Dictionary<string, object> message)
+        {
+            long at = (long)JsonParser.GetNumber(message, "at", 0);
+            object rawGames;
+            var games = new List<object>();
+            if (message.TryGetValue("games", out rawGames))
+            {
+                var items = rawGames as List<object>;
+                if (items != null) games = items;
+            }
+            if (games.Count == 0)
+            {
+                this.Channel.Toast("warn", "无法定时", "没有选中任何游戏。");
+                return;
+            }
+
+            int created = 0;
+            int failed = 0;
+            long now = ScheduleStore.Now();
+            for (int i = 0; i < games.Count; i++)
+            {
+                var one = games[i] as Dictionary<string, object>;
+                if (one == null)
+                {
+                    failed++;
+                    continue;
+                }
+                // 每项都带上公共字段，BuildSchedule 只认一个扁平对象。
+                one["at"] = (double)at;
+                if (one.ContainsKey("minGap") == false) one["minGap"] = JsonParser.GetNumber(message, "minGap", 15);
+                if (one.ContainsKey("maxGap") == false) one["maxGap"] = JsonParser.GetNumber(message, "maxGap", 45);
+                if (one.ContainsKey("jitter") == false) one["jitter"] = JsonParser.GetNumber(message, "jitter", 0);
+                if (one.ContainsKey("language") == false) one["language"] = JsonParser.GetString(message, "language");
+
+                ScheduleJob job = this.BuildSchedule(one, true);
+                if (job == null)
+                {
+                    failed++;
+                    continue;
+                }
+                if (ScheduleStore.SaveJob(job))
+                {
+                    created++;
+                }
+                else
+                {
+                    failed++;
+                }
+            }
+
+            Log.Write("schedule: batch created=" + created + " failed=" + failed + " at=" + at +
+                      " total=" + games.Count);
+            if (created > 0)
+            {
+                string when = FormatScheduleTime(at);
+                this.Channel.Toast("success", "已排入定时解锁",
+                    created + " 个游戏将在 " + when + " 开始解锁。" +
+                    (failed > 0 ? "另有 " + failed + " 个没有排上。" : ""));
+            }
+            else
+            {
+                this.Channel.Toast("error", "无法定时", "一个任务都没有排上，请检查程序目录是否可写。");
+            }
+            if (this._scheduler != null) this._scheduler.Publish();
+        }
+
+        private void CancelSchedule(Dictionary<string, object> message)
+        {
+            string id = JsonParser.GetString(message, "id");
+            if (string.IsNullOrEmpty(id))
+            {
+                this.Channel.Toast("warn", "无法取消", "没有指定要取消的任务。");
+                return;
+            }
+            ScheduleStore.DeleteJob(id);
+            Log.Write("schedule: cancelled " + id);
+            this.Channel.Toast("success", "已取消定时", "这条定时解锁任务已删除。");
+            if (this._scheduler != null) this._scheduler.Publish();
+        }
+
+        /// <summary>把 unix 秒按本机时区格式化成「MM-dd HH:mm」，只用于提示文案。</summary>
+        private static string FormatScheduleTime(long unixSeconds)
+        {
+            try
+            {
+                return DateTimeOffset.FromUnixTimeSeconds(unixSeconds).ToLocalTime()
+                    .ToString("MM-dd HH:mm", CultureInfo.InvariantCulture);
+            }
+            catch (Exception)
+            {
+                return unixSeconds.ToString(CultureInfo.InvariantCulture);
+            }
         }
 
         /// <summary>

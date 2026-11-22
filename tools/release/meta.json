@@ -1,5 +1,5 @@
 {
-  "description": "Steam 成就管理器 · 现代化重构版 —— 基于 gibbed/SteamAchievementManager 的二次修改版（WebView2 界面 + 完整汉化 + 随机时间解锁 + 稀有成就）",
+  "description": "Steam 成就管理器 · 现代化重构版 —— 基于 gibbed/SteamAchievementManager 的二次修改版（WebView2 界面 + 完整汉化 + 随机时间解锁 + 定时解锁 + 稀有成就）",
   "topics": [
     "steam",
     "steam-achievement-manager",
@@ -11,7 +11,7 @@
     "achievements"
   ],
   "homepage": "https://github.com/Knight003300/SAM-Modern",
-  "tag": "v1.8.0",
-  "releaseName": "SAM Modern v1.8.0 · 修掉打开时多出的黑框",
-  "releaseBody": "v1.8.0 修掉了一个从早期版本就存在的问题：双击 `SAM.Modern.exe` 时，除了应用窗口还会多出一个黑色命令行窗口。\n\n**下载 `SAM-Modern-zhCN.zip`，解压后双击 `SAM.Modern.exe` 即可运行**（免安装，需已安装并登录 Steam）。\n\n### 修复\n- **不再多出黑色控制台窗口**：此前构建脚本按 `target: 'exe'` 链接，C# 编译器据此产出**控制台子系统**（PE Subsystem = 3）的程序，Windows 会为它分配一个控制台窗口。现在改为 `target: 'winexe'`（GUI 子系统，Subsystem = 2），双击只出现应用窗口本身。\n- **关掉黑框不会带着工具一起退出**：控制台窗口属于进程本身，关闭它等于向进程发送 `CTRL_CLOSE`，主窗口会跟着消失 —— 这也是观众反馈里「一关黑框工具也跟着关掉」的原因，随本次修复一并消失。\n- 程序不写 stdout（日志走同目录 `sam-modern.log`），改链接目标没有丢失任何诊断信息。\n\n### 说明\n- 本次只改构建配置（`tools/build.mjs`），界面与数据协议都没有变化，可直接覆盖旧版本目录使用。\n- 如果你用的是 v1.7.0 或更早版本且暂时不想升级：那个黑框**不要手动关**，让它开着即可；关掉等于让工具退出。\n- 本项目是 [gibbed/SteamAchievementManager](https://github.com/gibbed/SteamAchievementManager) 的二次修改版，保留并直接复用上游 `SAM.API`，界面层全部重写。上游 zlib License。\n- 首次运行可能被 SmartScreen 拦一下（无信誉记录的新程序），点「更多信息 → 仍要运行」。\n- 只修改本地 Steam 用户数据，不上传、不联网写库。"
+  "tag": "v1.9.0",
+  "releaseName": "SAM Modern v1.9.0 · 定时解锁",
+  "releaseBody": "v1.9.0 加了**定时解锁**：把解锁时间定在某个具体的分钟，到点自动逐个解锁 —— 关掉窗口去干别的也行。还支持**多个游戏在同一分钟一起开始**。\n\n**下载 `SAM-Modern-zhCN.zip`，解压后双击 `SAM.Modern.exe` 即可运行**（免安装，需已安装并登录 Steam）。\n\n### 新增 · 定时解锁\n- **游戏页工具栏「定时解锁」**：选好解锁数量与间隔，再把「解锁时刻」填成想要的**时:分**（弹窗里有 11:11 / 22:22 / 00:00 / 04:44 四个快捷时刻），点「排入定时」即可。到点后由后台进程按随机间隔逐个真实解锁，每个成就仍由 Steam 记下各自的真实时间。\n- **游戏库工具栏「定时批量解锁」**：勾选任意多个游戏，设一个共同时刻，它们会在**同一分钟**各自开始解锁（每个游戏一个后台进程并行跑）。\n- **标题栏的定时任务 chip**：有待执行任务时，标题栏左侧出现「N 个定时 · HH:mm」，点开能看到每条任务的游戏、时刻、数量、间隔与倒计时，也能在那里取消。状态栏也会显示任务数量。\n- 任务保存在程序目录的 `schedule\\` 下（一条任务一个 JSON 文件），关掉程序再打开仍然在；到点前 25 秒才会拉起后台解锁进程，之前不占 Steam 管道。\n\n### 注意\n- **到点时本工具必须还开着**（最小化、隐藏都行，但进程不能退出），并且 Steam 要在运行。工具退出后任务不会执行，下次打开时过期的任务会被标为「已错过」并清掉。\n- 解锁进程是独立的隐藏进程，不弹窗口；它会先等 Steam 的统计数据就绪再开始，因此到点后可能先有一小段准备时间（通常几秒）。\n- 已解锁的成就不会被重复解锁；受保护成就自动跳过。\n\n### 说明\n- 本次界面新增了标题栏 chip、两处工具栏按钮与三个弹窗（单游戏定时 / 批量定时 / 任务列表），其余界面与数据协议没有变化，可直接覆盖旧版本目录使用。\n- 本项目是 [gibbed/SteamAchievementManager](https://github.com/gibbed/SteamAchievementManager) 的二次修改版，保留并直接复用上游 `SAM.API`，界面层全部重写。上游 zlib License。\n- 首次运行可能被 SmartScreen 拦一下（无信誉记录的新程序），点「更多信息 → 仍要运行」。\n- 只修改本地 Steam 用户数据，不上传、不联网写库。"
 }
