@@ -64,6 +64,24 @@
   var PROGRESS_KEY = 'sam.progress.v1';
   var sessionProgress = {};
 
+  // 上次看的是哪一类游戏。类型筛选是个长期偏好（比如只关心「试玩」），
+  // 每次开窗都回到「全部」等于每次都要重新点一遍。
+  var PICKER_TYPE_KEY = 'sam.pickerType.v1';
+
+  function loadPickerType() {
+    try {
+      var raw = window.localStorage ? window.localStorage.getItem(PICKER_TYPE_KEY) : null;
+      if (raw === 'all' || (raw && Object.prototype.hasOwnProperty.call(TYPE_LABEL, raw))) return raw;
+    } catch (err) { }
+    return 'all';
+  }
+
+  function savePickerType(type) {
+    try {
+      if (window.localStorage) window.localStorage.setItem(PICKER_TYPE_KEY, type);
+    } catch (err) { }
+  }
+
   function loadProgress() {
     var next = {};
     try {
@@ -774,6 +792,7 @@
       if (on) items[i].classList.add('is-active');
       else items[i].classList.remove('is-active');
       items[i].setAttribute('aria-selected', on ? 'true' : 'false');
+      items[i].setAttribute('aria-pressed', on ? 'true' : 'false');
     }
   }
 
@@ -819,6 +838,7 @@
     if (state.mode === 'picker') {
       var shown = filteredGames().length;
       parts.push('共 <b>' + state.picker.total + '</b> 个游戏');
+      if (state.picker.type !== 'all') parts.push('只看 <b>' + (TYPE_LABEL[state.picker.type] || '') + '</b>');
       if (shown !== state.picker.total) parts.push('筛选出 <b>' + shown + '</b> 个');
     } else {
       var p = progressInfo();
@@ -846,6 +866,58 @@
       if (String(g.name).toLowerCase().indexOf(q) >= 0) return true;
       return String(g.id).indexOf(q) >= 0;
     });
+  }
+
+  // 各类型有多少个游戏。只按类型统计，不受搜索影响 —— 搜索时数字保持稳定，
+  // 用户才能看出「是搜索没命中，还是这个类型本来就没东西」。
+  function typeCounts() {
+    var counts = { all: state.picker.games.length };
+    for (var key in TYPE_LABEL) {
+      if (Object.prototype.hasOwnProperty.call(TYPE_LABEL, key)) counts[key] = 0;
+    }
+    for (var i = 0; i < state.picker.games.length; i++) {
+      var t = state.picker.games[i].type;
+      if (counts[t] !== undefined) counts[t] += 1;
+    }
+    return counts;
+  }
+
+  // 数量写进段控，0 个的档位置灰禁点：点进去必然是空列表，不如不让点。
+  function syncTypeSeg() {
+    if (!els.pickerTypeSeg) return;
+    var counts = typeCounts();
+    var items = els.pickerTypeSeg.querySelectorAll('.seg__item');
+    for (var i = 0; i < items.length; i++) {
+      var type = items[i].getAttribute('data-type');
+      var n = counts[type] || 0;
+      var numEl = items[i].querySelector('.seg__num');
+      if (numEl) numEl.textContent = n > 0 ? String(n) : '';
+      var empty = type !== 'all' && n === 0;
+      if (empty) items[i].classList.add('is-empty');
+      else items[i].classList.remove('is-empty');
+      items[i].disabled = empty;
+      items[i].setAttribute('aria-disabled', empty ? 'true' : 'false');
+    }
+  }
+
+  function ensurePickerType() {
+    if (state.picker.type === 'all') return;
+    var counts = typeCounts();
+    if (counts[state.picker.type] > 0) return;
+    state.picker.type = 'all';
+    savePickerType('all');
+  }
+
+  function clearPickerFilter() {
+    state.picker.query = '';
+    state.picker.type = 'all';
+    savePickerType('all');
+    if (els.pickerSearch) els.pickerSearch.value = '';
+    setHidden(els.pickerSearchClear, true);
+    setActive(els.pickerTypeSeg, 'data-type', 'all');
+    renderPicker();
+    renderStatus();
+    if (els.pickerSearch) els.pickerSearch.focus();
   }
 
   /* 把候选封面串成一个属性，图片加载失败时按顺序换下一个。 */
@@ -921,6 +993,11 @@
     els.pickerSkeleton.classList.remove('is-on');
     els.pickerSkeleton.innerHTML = '';
 
+    // 重新扫描后某个类型可能一个都不剩了，别把用户困在空列表里。
+    ensurePickerType();
+    setActive(els.pickerTypeSeg, 'data-type', state.picker.type);
+    syncTypeSeg();
+
     var list = filteredGames();
     setHidden(els.gameGrid, list.length === 0);
     setHidden(els.pickerEmpty, list.length > 0);
@@ -929,13 +1006,26 @@
       if (state.picker.games.length === 0) {
         els.pickerEmptyTitle.textContent = '还没有可管理的游戏';
         els.pickerEmptyText.textContent = '未在 Steam 库中找到任何游戏，试试点击右上角「重新扫描」。';
+        setHidden(els.pickerEmptyAction, true);
       } else {
+        // 这里一定是有筛选条件才空：没有条件时 filteredGames 等于全部游戏。
+        var q = state.picker.query.trim();
+        var typeLabel = TYPE_LABEL[state.picker.type] || '';
         els.pickerEmptyTitle.textContent = '没有匹配的游戏';
-        els.pickerEmptyText.textContent = '换个关键词，或切换上方的类型筛选。';
+        if (q && state.picker.type !== 'all') {
+          els.pickerEmptyText.textContent = '「' + typeLabel + '」里没有名称或 AppID 包含「' + q + '」的游戏。';
+        } else if (q) {
+          els.pickerEmptyText.textContent = '没有名称或 AppID 包含「' + q + '」的游戏。';
+        } else {
+          els.pickerEmptyText.textContent = '「' + typeLabel + '」分类下暂时没有游戏。';
+        }
+        if (els.pickerEmptyAction) els.pickerEmptyAction.textContent = '清空筛选';
+        setHidden(els.pickerEmptyAction, false);
       }
       els.gameGrid.innerHTML = '';
       return;
     }
+    setHidden(els.pickerEmptyAction, true);
     els.gameGrid.innerHTML = list.map(gameCardHtml).join('');
     markLoadedImages();
   }
@@ -2841,10 +2931,14 @@
 
   /* ---------- 游戏库：多个游戏同一分钟 ---------- */
 
+  // 批量定时跟着筛选走：筛到「试玩」再点批量，就只给试玩排任务。
   function onScheduleBatch() {
-    var games = state.picker.games;
+    var games = filteredGames();
     if (!games || games.length === 0) {
-      toast('info', '还没有可选的游戏', '等游戏库扫描完成后再试。');
+      toast('info', '没有可选的游戏',
+        state.picker.games.length > 0
+          ? '当前筛选下没有游戏，换个类型或清空搜索后再试。'
+          : '等游戏库扫描完成后再试。');
       return;
     }
     openScheduleBatchModal(games);
@@ -3598,6 +3692,7 @@
     els.pickerEmpty = document.getElementById('pickerEmpty');
     els.pickerEmptyTitle = document.getElementById('pickerEmptyTitle');
     els.pickerEmptyText = document.getElementById('pickerEmptyText');
+    els.pickerEmptyAction = document.getElementById('pickerEmptyAction');
     els.btnBack = document.getElementById('btnBack');
     els.sideCover = document.getElementById('sideCover');
     els.sideTitle = document.getElementById('sideTitle');
@@ -3743,13 +3838,18 @@
         els.pickerSearch.focus();
       });
     }
+    if (els.pickerEmptyAction) {
+      els.pickerEmptyAction.addEventListener('click', clearPickerFilter);
+    }
     if (els.pickerTypeSeg) {
       els.pickerTypeSeg.addEventListener('click', function (e) {
         var btn = e.target.closest ? e.target.closest('.seg__item') : null;
         if (!btn) return;
         var type = btn.getAttribute('data-type');
         if (!type || type === state.picker.type) return;
+        if (btn.disabled) return;
         state.picker.type = type;
+        savePickerType(type);
         setActive(els.pickerTypeSeg, 'data-type', type);
         renderPicker();
         renderStatus();
@@ -3943,6 +4043,13 @@
           setHidden(els.pickerSearchClear, true);
           renderPicker();
           renderStatus();
+        } else if (state.mode === 'picker' && state.picker.type !== 'all') {
+          e.preventDefault();
+          state.picker.type = 'all';
+          savePickerType('all');
+          setActive(els.pickerTypeSeg, 'data-type', 'all');
+          renderPicker();
+          renderStatus();
         } else if (state.mode === 'game' && state.ui.query) {
           state.ui.query = '';
           if (els.achSearch) els.achSearch.value = '';
@@ -3984,6 +4091,7 @@
 
   function boot() {
     loadProgress();
+    state.picker.type = loadPickerType();
     cacheEls();
     bindWindowControls();
     bindPicker();
@@ -4027,7 +4135,7 @@
   }
 
   window.SAM = {
-    version: '1.9.5',
+    version: '1.9.6',
     handleEvent: handleEvent,
     mock: enterMock,
     getState: function () {

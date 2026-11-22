@@ -379,6 +379,31 @@ dt {
   background: var(--bg-2);
 }
 
+/* 类型筛选：每档后面跟数量，空档位置灰且不可点（点进去必然是空列表） */
+.seg__num {
+  margin-left: 4px;
+  font-size: var(--t-micro);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+
+.seg__num:empty {
+  display: none;
+}
+
+.seg__item.is-active .seg__num {
+  color: var(--text-2);
+}
+
+.seg__item.is-empty,
+.seg__item.is-empty:hover {
+  color: var(--text-3);
+  background: none;
+  opacity: 0.45;
+  cursor: default;
+}
+
 /* 纯文字 tab：选中用下划线，不用底色 */
 .seg--tabs {
   gap: var(--s5);
@@ -1334,6 +1359,11 @@ dt {
 .empty__text {
   font-size: var(--t-body);
   color: var(--text-3);
+}
+
+/* 空状态里的「清空筛选」：只有筛选条件造成的空列表才出现 */
+.empty__act {
+  margin-top: var(--s2);
 }
 
 .spinner {

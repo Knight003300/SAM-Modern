@@ -64,16 +64,16 @@
       </label>
 
       <div class="seg" id="pickerTypeSeg" role="group" aria-label="游戏类型">
-        <button type="button" class="seg__item is-active" data-type="all" aria-pressed="true">全部</button>
-        <button type="button" class="seg__item" data-type="normal" aria-pressed="false">正式版</button>
-        <button type="button" class="seg__item" data-type="demo" aria-pressed="false">试玩</button>
-        <button type="button" class="seg__item" data-type="mod" aria-pressed="false">模组</button>
-        <button type="button" class="seg__item" data-type="junk" aria-pressed="false">其他</button>
+        <button type="button" class="seg__item is-active" data-type="all" aria-pressed="true">全部<span class="seg__num"></span></button>
+        <button type="button" class="seg__item" data-type="normal" aria-pressed="false">正式版<span class="seg__num"></span></button>
+        <button type="button" class="seg__item" data-type="demo" aria-pressed="false">试玩<span class="seg__num"></span></button>
+        <button type="button" class="seg__item" data-type="mod" aria-pressed="false">模组<span class="seg__num"></span></button>
+        <button type="button" class="seg__item" data-type="junk" aria-pressed="false">其他<span class="seg__num"></span></button>
       </div>
 
       <div class="toolbar__spacer"></div>
 
-      <button type="button" class="btn btn--ghost" id="btnScheduleAll" title="让多个游戏在同一分钟开始解锁">
+      <button type="button" class="btn btn--ghost" id="btnScheduleAll" title="让多个游戏在同一秒开始解锁（只针对当前筛选出来的游戏）">
         <svg class="btn__ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <circle cx="10" cy="10" r="6.2" /><path d="M10 6.6V10l2.4 1.5" />
         </svg>
@@ -130,6 +130,7 @@
       <div class="empty" id="pickerEmpty" hidden>
         <p class="empty__title" id="pickerEmptyTitle">还没有可管理的游戏</p>
         <p class="empty__text" id="pickerEmptyText">未在 Steam 库中找到任何游戏，试试重新扫描。</p>
+        <button type="button" class="btn btn--sm btn--ghost empty__act" id="pickerEmptyAction" hidden>清空筛选</button>
       </div>
     </section>
 
