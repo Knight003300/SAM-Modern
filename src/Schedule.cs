@@ -116,7 +116,8 @@ namespace SAM.Modern
                     if (id.Length > 0) job.Achievements.Add(id);
                 }
             }
-            if (job.MinGap < 1) job.MinGap = 1;
+            // 允许 0：「立刻解锁」的任务就是 minGap = maxGap = 0。
+            if (job.MinGap < 0) job.MinGap = 0;
             if (job.MaxGap < job.MinGap) job.MaxGap = job.MinGap;
             return job;
         }

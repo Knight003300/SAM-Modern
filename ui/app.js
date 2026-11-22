@@ -318,6 +318,9 @@
       case 'scheduleMissed':
         onScheduleEvent(ev, 'missed');
         break;
+      case 'schedulePool':
+        onSchedulePool(ev);
+        break;
       case 'mock':
         if (!state.mock) enterMock();
         break;
@@ -2176,9 +2179,6 @@
      10.5 定时解锁（指定某一分钟开始，到点自动执行）
      --------------------------------------------------------------------------- */
 
-  // 常用时刻：观众点名的几个整点 / 叠数时间，点一下直接填进输入框
-  var SCHEDULE_QUICK = ['11:11', '22:22', '00:00', '04:44'];
-
   // 批量定时里每个游戏解锁多少个：游戏库阶段拿不到各游戏的候选数，只能给固定档位
   var SCHEDULE_BATCH_COUNTS = [
     { value: 0, label: '全部剩余' },
@@ -2264,12 +2264,31 @@
     return out;
   }
 
-  // 定时解锁只用三个内置间隔档：自定义四段输入在随机解锁弹窗里已经有入口了
+  // 定时解锁的间隔档：第一档「立刻解锁」间隔为 0（worker 会连着写完，不等待），
+  // 后面三个沿用随机解锁的内置档；自定义四段输入只在随机解锁弹窗里有入口。
   function schedGaps() {
-    return RANDOM_GAPS.slice(0, 3);
+    return [{ label: '立刻解锁', min: 0, max: 0 }].concat(RANDOM_GAPS.slice(0, 3));
   }
 
-  // 时刻输入行：时 / 分 / 秒三个数字框 + 四个快捷时刻
+  function isInstantGap(gap) {
+    return !gap || (!gap.min && !gap.max);
+  }
+
+  // 间隔文案：立刻解锁不该说成「等 0 秒」。
+  function gapText(gap) {
+    if (isInstantGap(gap)) return '全部在同一秒立刻连续解锁';
+    if (gap.min === gap.max) return '每隔 ' + fmtGap(gap.min) + ' 解锁一个';
+    return '每两个之间随机等 ' + fmtGap(gap.min) + ' 到 ' + fmtGap(gap.max);
+  }
+
+  // 整轮耗时：0 秒的「立刻」档说「不到 1 秒」比「0 秒」自然。
+  function spanText(low, high) {
+    if (high <= 0) return '不到 1 秒';
+    if (low === high) return fmtGap(low);
+    return fmtGap(low) + ' – ' + fmtGap(high);
+  }
+
+  // 时刻输入行：时 / 分 / 秒三个数字框（精确到某一秒）
   function timeRowHtml(hour, minute, second) {
     var h = ['<div class="sch-time">'];
     h.push('<span class="sch-time__cap">解锁时刻</span>');
@@ -2288,12 +2307,6 @@
       '" data-role="second" aria-label="解锁时刻的秒" />');
     h.push('<span class="gap-custom__suffix">秒</span>');
     h.push('</label>');
-    h.push('</div>');
-    h.push('<div class="sch-quick">');
-    for (var i = 0; i < SCHEDULE_QUICK.length; i++) {
-      h.push('<button type="button" class="opt" data-quick="' + SCHEDULE_QUICK[i] + '">' +
-        SCHEDULE_QUICK[i] + '</button>');
-    }
     h.push('</div>');
     return h.join('');
   }
@@ -2366,6 +2379,13 @@
     if (modalState && modalState.kind === 'scheduleList') openScheduleListModal();
   }
 
+  // 批量弹窗按 appId 请求成就池，回包时交给弹窗闭包自己存（池子活在弹窗作用域里）
+  function onSchedulePool(ev) {
+    if (modalState && modalState.kind === 'scheduleBatch' && modalState.poolHandler) {
+      modalState.poolHandler(ev);
+    }
+  }
+
   /* ---------- 任务列表弹窗 ---------- */
 
   function jobMetaText(job) {
@@ -2381,7 +2401,9 @@
     } else {
       bits.push('全部剩余');
     }
-    if (job.minGap && job.maxGap) bits.push('间隔 ' + fmtGap(job.minGap) + '–' + fmtGap(job.maxGap));
+    if (typeof job.minGap === 'number' && typeof job.maxGap === 'number') {
+      bits.push((!job.minGap && !job.maxGap) ? '立刻解锁' : '间隔 ' + fmtGap(job.minGap) + '–' + fmtGap(job.maxGap));
+    }
     bits.push(countdownText(d));
     return bits.join(' · ');
   }
@@ -2491,7 +2513,7 @@
   function openScheduleGameModal(pool) {
     closeModal();
     var list = Array.isArray(pool) ? pool : [];
-    var sel = { count: 0, gap: 1, rare: 0, hour: 22, minute: 22, second: 0, mode: 0 };
+    var sel = { count: 0, gap: 0, rare: 0, hour: 22, minute: 22, second: 0, mode: 0 };
     var picked = {};
     var el = document.createElement('div');
     el.className = 'modal modal--wide';
@@ -2515,7 +2537,7 @@
     body.push('<div data-role="countBox">' + optGroupHtml('count', '解锁数量', countOptions(list.length), 0) + '</div>');
     body.push('</div>');
     body.push('<div data-role="achBox" hidden>' + achPickHtml(list, picked) + '</div>');
-    body.push(optGroupHtml('gap', '解锁间隔', schedGaps(), 1));
+    body.push(optGroupHtml('gap', '解锁间隔', schedGaps(), 0));
 
     var parts = [];
     parts.push('<div class="modal__body">' + body.join('') + '</div>');
@@ -2564,11 +2586,10 @@
         var near = target.getTime() - Date.now() < 60000 ? '（时间很近，可能来不及预热 Steam，建议至少留 1 分钟）' : '';
         timeHint.textContent = dayLabel(target) + ' ' + clock + ' 开始（' + countdownText(target) + '）' + near;
       }
-      var qs = el.querySelectorAll('[data-quick]');
-      for (var qi = 0; qi < qs.length; qi++) {
-        if (qs[qi].getAttribute('data-quick') === hhmm(sel.hour, sel.minute) && sel.second === 0) qs[qi].classList.add('is-active');
-        else qs[qi].classList.remove('is-active');
-      }
+      // 立刻解锁时「整轮大约 0 秒」读着别扭，换一句专门的说法。
+      var tail = isInstantGap(gap)
+        ? '全部在同一秒立刻连续解锁。'
+        : gapText(gap) + '，整轮大约 ' + spanText(totalLow, totalHigh) + '。';
 
       if (summaryText) {
         if (manual) {
@@ -2576,9 +2597,7 @@
           if (n <= 0) {
             ml.push('在下面的列表里勾选 ' + dayLabel(target) + ' ' + clock + ' 要解锁的成就。');
           } else {
-            ml.push('将在 ' + dayLabel(target) + ' ' + clock + ' 按顺序解锁你勾选的 ' + n + ' 个成就，每两个之间随机等 ' +
-              fmtGap(gap.min) + (gap.max > gap.min ? '到 ' + fmtGap(gap.max) : '') + '，整轮大约 ' +
-              (totalHigh === totalLow ? fmtGap(totalLow) : fmtGap(totalLow) + ' – ' + fmtGap(totalHigh)) + '。');
+            ml.push('将在 ' + dayLabel(target) + ' ' + clock + ' 按顺序解锁你勾选的 ' + n + ' 个成就，' + tail);
           }
           ml.push('到点前请保持本工具和 Steam 都开着；中途可以在标题栏的定时任务里取消，已经解锁的不会回退。');
           summaryText.textContent = ml.join('\n');
@@ -2586,9 +2605,7 @@
           summaryText.textContent = '当前范围里没有可解锁的成就。换一个更大的范围试试。';
         } else {
           var lines = [];
-          lines.push('将在 ' + dayLabel(target) + ' ' + clock + ' 开始解锁 ' + n + ' 个成就，每两个之间随机等 ' +
-            fmtGap(gap.min) + (gap.max > gap.min ? '到 ' + fmtGap(gap.max) : '') + '，整轮大约 ' +
-            (totalHigh === totalLow ? fmtGap(totalLow) : fmtGap(totalLow) + ' – ' + fmtGap(totalHigh)) + '。');
+          lines.push('将在 ' + dayLabel(target) + ' ' + clock + ' 开始解锁 ' + n + ' 个成就，' + tail);
           var pct = (RARE_OPTIONS[sel.rare] || RARE_OPTIONS[0]).pct;
           if (pct > 0) {
             lines.push('候选里的 ' + poolNow.length + ' 个成就都属于全服解锁率低于 ' + pct + '% 的稀有成就。');
@@ -2611,17 +2628,6 @@
     if (secondInput) secondInput.addEventListener('change', syncAll);
 
     el.addEventListener('click', function (e) {
-      var quick = e.target.closest ? e.target.closest('[data-quick]') : null;
-      if (quick) {
-        var vs = String(quick.getAttribute('data-quick')).split(':');
-        var h = Math.floor(Number(vs[0]));
-        var m = Math.floor(Number(vs[1]));
-        if (hourInput) hourInput.value = String(isFinite(h) ? h : 0);
-        if (minuteInput) minuteInput.value = String(isFinite(m) ? m : 0);
-        if (secondInput) secondInput.value = '0';
-        syncAll();
-        return;
-      }
       var hit = e.target.closest ? e.target.closest('[data-role]') : null;
       var role = hit ? hit.getAttribute('data-role') : '';
       if (role === 'achAll') { pick.all(); return; }
@@ -2714,7 +2720,13 @@
 
   function openScheduleBatchModal(games) {
     closeModal();
-    var sel = { count: 0, gap: 1, hour: 22, minute: 22, second: 0 };
+    var sel = { gap: 0, count: 0, hour: 22, minute: 22, second: 0, mode: 0 };
+    var pickedGames = {};   // appId -> true
+    var pickedAch = {};     // appId -> { achievementId: true }
+    var pools = {};         // appId -> { loading: bool, cached: bool, list: [] }
+    var activeId = 0;       // 指定成就模式下正在编辑哪个游戏
+    var mountedFor = '';    // 已经挂载的成就列表标识，避免每次 syncAll 都重建（会丢搜索词）
+    var currentPick = null; // 当前挂载的那份成就选择区（全选 / 清空要转给它）
     var el = document.createElement('div');
     el.className = 'modal modal--wide';
     el.setAttribute('role', 'dialog');
@@ -2730,6 +2742,9 @@
     body.push(timeRowHtml(sel.hour, sel.minute, sel.second));
     body.push('<p class="gap-custom__hint" data-role="timeHint"></p>');
     body.push('</div>');
+
+    body.push(optGroupHtml('mode', '解锁哪些成就',
+      [{ label: '按数量随机' }, { label: '指定成就' }], 0));
 
     body.push('<div class="sch-block">');
     body.push('<div class="sch-block__head">');
@@ -2751,8 +2766,21 @@
     body.push('</div>');
     body.push('</div>');
 
+    body.push('<div data-role="randomBox">');
     body.push(optGroupHtml('count', '每个游戏解锁', SCHEDULE_BATCH_COUNTS, 0));
-    body.push(optGroupHtml('gap', '解锁间隔', schedGaps(), 1));
+    body.push('</div>');
+
+    body.push('<div data-role="achBox" hidden>');
+    body.push('<div class="sch-block">');
+    body.push('<div class="sch-block__head">');
+    body.push('<span class="opt-group__label">为每个游戏挑成就</span>');
+    body.push('</div>');
+    body.push('<div class="sch-chips" data-role="achGames"></div>');
+    body.push('<div data-role="achHost"></div>');
+    body.push('</div>');
+    body.push('</div>');
+
+    body.push(optGroupHtml('gap', '解锁间隔', schedGaps(), 0));
 
     var parts = [];
     parts.push('<div class="modal__body">' + body.join('') + '</div>');
@@ -2770,6 +2798,10 @@
     var secondInput = el.querySelector('[data-role="second"]');
     var pickedEl = el.querySelector('[data-role="picked"]');
     var gamesBox = el.querySelector('[data-role="games"]');
+    var randomBox = el.querySelector('[data-role="randomBox"]');
+    var achBox = el.querySelector('[data-role="achBox"]');
+    var achGamesBox = el.querySelector('[data-role="achGames"]');
+    var achHost = el.querySelector('[data-role="achHost"]');
     var okBtn = el.querySelector('[data-role="ok"]');
 
     function targetDate() {
@@ -2780,7 +2812,19 @@
       return nextAt(c.hour, c.minute, c.second);
     }
 
-    function pickedIds() {
+    function gameById(id) {
+      for (var i = 0; i < games.length; i++) {
+        if (num(games[i].id, 0) === id) return games[i];
+      }
+      return null;
+    }
+
+    function gameName(id) {
+      var g = gameById(id);
+      return (g && g.name) || ('App ' + id);
+    }
+
+    function pickedIdList() {
       var out = [];
       if (!gamesBox) return out;
       var boxes = gamesBox.querySelectorAll('.sch-game__box');
@@ -2792,11 +2836,110 @@
       return out;
     }
 
+    function pickedAchIds(id) {
+      var map = pickedAch[id];
+      if (!map) return [];
+      var pool = pools[id] && pools[id].list ? pools[id].list : [];
+      var out = [];
+      for (var i = 0; i < pool.length; i++) {
+        if (map[pool[i].id]) out.push(pool[i].id);
+      }
+      return out;
+    }
+
+    // 游戏库窗口拿不到别的游戏的成就列表，只能让主机从本地缓存里读（不连 Steam，很快）。
+    function ensurePool(id) {
+      if (pools[id]) return;
+      if (state.mock) {
+        var payload = mockPayloadFor(id);
+        var list = [];
+        for (var i = 0; i < payload.achievements.length; i++) {
+          var a = payload.achievements[i];
+          if (a.achieved || a.protect) continue;
+          list.push({ id: a.id, name: a.name, desc: a.desc || '', rarity: a.rarity });
+        }
+        pools[id] = { loading: false, cached: true, list: list };
+        return;
+      }
+      pools[id] = { loading: true, cached: true, list: [] };
+      send('schedule/pool', { appId: id });
+    }
+
+    // 主机回包：塞进池子，如果正停在这个游戏上就重画一次
+    var poolHandler = function (ev) {
+      var id = Number(ev.appId);
+      if (!isFinite(id) || id <= 0) return;
+      var list = [];
+      var raw = ev.achievements;
+      if (Array.isArray(raw)) {
+        for (var i = 0; i < raw.length; i++) {
+          var it = raw[i];
+          if (!it || !it.id) continue;
+          list.push({ id: String(it.id), name: it.name || String(it.id), desc: '', rarity: it.rarity });
+        }
+      }
+      pools[id] = { loading: false, cached: !!ev.cached, list: list };
+      mountedFor = '';
+      syncAll();
+    };
+
+    function renderAchChips() {
+      if (!achGamesBox) return;
+      var ids = pickedIdList();
+      if (ids.length === 0) {
+        achGamesBox.innerHTML = '<p class="gap-custom__hint">先在上面勾选游戏，再为每个游戏挑成就。</p>';
+        return;
+      }
+      var h = [];
+      for (var i = 0; i < ids.length; i++) {
+        var id = ids[i];
+        var n = pickedAchIds(id).length;
+        h.push('<button type="button" class="opt' + (id === activeId ? ' is-active' : '') +
+          '" data-role="achGame" data-id="' + id + '">' + esc(gameName(id)) +
+          (n > 0 ? '（' + n + '）' : '') + '</button>');
+      }
+      achGamesBox.innerHTML = h.join('');
+    }
+
+    function mountPick() {
+      if (!achHost) return;
+      currentPick = null;
+      var id = activeId;
+      var pool = pools[id];
+      if (!id) {
+        achHost.innerHTML = '<p class="gap-custom__hint">先在上面勾选游戏。</p>';
+        return;
+      }
+      if (!pool || pool.loading) {
+        achHost.innerHTML = '<p class="gap-custom__hint">正在读取《' + esc(gameName(id)) + '》的成就…</p>';
+        return;
+      }
+      if (!pool.cached) {
+        achHost.innerHTML = '<p class="gap-custom__hint">还没有《' + esc(gameName(id)) +
+          '》的本地缓存。先在游戏库里打开一次这个游戏，再回来挑成就。</p>';
+        return;
+      }
+      if (pool.list.length === 0) {
+        achHost.innerHTML = '<p class="gap-custom__hint">《' + esc(gameName(id)) +
+          '》里没有可解锁的成就了。</p>';
+        return;
+      }
+      if (!pickedAch[id]) pickedAch[id] = {};
+      achHost.innerHTML = achPickHtml(pool.list, pickedAch[id]);
+      currentPick = bindAchPick(achHost, pool.list, pickedAch[id], function () {
+        renderAchChips();
+        syncAll();
+      });
+    }
+
     function syncAll() {
       var target = targetDate();
-      var ids = pickedIds();
+      var manual = sel.mode === 1;
+      setHidden(randomBox, manual);
+      setHidden(achBox, !manual);
+      var ids = pickedIdList();
       var gaps = schedGaps();
-      var gap = gaps[sel.gap] || gaps[1];
+      var gap = gaps[sel.gap] || gaps[0];
       var countOpt = SCHEDULE_BATCH_COUNTS[sel.count] || SCHEDULE_BATCH_COUNTS[0];
       var clock = clockShort(target);
 
@@ -2805,20 +2948,38 @@
         var near = target.getTime() - Date.now() < 60000 ? '（时间很近，可能来不及预热 Steam，建议至少留 1 分钟）' : '';
         timeHint.textContent = dayLabel(target) + ' ' + clock + ' 开始（' + countdownText(target) + '）' + near;
       }
-      var qs = el.querySelectorAll('[data-quick]');
-      for (var qi = 0; qi < qs.length; qi++) {
-        if (qs[qi].getAttribute('data-quick') === hhmm(sel.hour, sel.minute) && sel.second === 0) qs[qi].classList.add('is-active');
-        else qs[qi].classList.remove('is-active');
+
+      if (manual) {
+        // 勾上的游戏要立刻去取成就池；当前编辑的游戏被取消勾选就切到第一个
+        for (var pi = 0; pi < ids.length; pi++) ensurePool(ids[pi]);
+        if (ids.indexOf(activeId) < 0) activeId = ids.length > 0 ? ids[0] : 0;
+        renderAchChips();
+        var key = activeId + '|' + ((pools[activeId] && pools[activeId].list) ? pools[activeId].list.length : 0);
+        if (key !== mountedFor) {
+          mountedFor = key;
+          mountPick();
+        }
       }
+
       if (summaryText) {
         if (ids.length === 0) {
           summaryText.textContent = '先在下面选好游戏，再定一个开始时刻。到点后每个游戏都会单独拉起一个解锁进程，互不影响。';
         } else {
           var lines = [];
-          lines.push('将在 ' + dayLabel(target) + ' ' + clock + ' 为 ' + ids.length + ' 个游戏开始解锁：每个游戏' +
-            (countOpt.value > 0 ? '解锁 ' + countOpt.value + ' 个成就' : '解锁全部剩余成就') + '，' +
-            '每两个之间随机等 ' + fmtGap(gap.min) + (gap.max > gap.min ? '到 ' + fmtGap(gap.max) : '') + '。');
-          lines.push('到点前请保持本工具和 Steam 都开着；中途可以在标题栏的定时任务里逐个取消，已经解锁的不会回退。');
+          var tail = isInstantGap(gap)
+            ? '全部在同一秒立刻连续解锁。'
+            : gapText(gap) + '。';
+          if (manual) {
+            var total = 0;
+            for (var ai = 0; ai < ids.length; ai++) total += pickedAchIds(ids[ai]).length;
+            lines.push('将在 ' + dayLabel(target) + ' ' + clock + ' 为 ' + ids.length + ' 个游戏解锁你指定的 ' +
+              total + ' 个成就，' + tail);
+            lines.push('每个游戏一个独立进程，各自按你勾选的顺序解锁。到点前请保持本工具和 Steam 都开着。');
+          } else {
+            lines.push('将在 ' + dayLabel(target) + ' ' + clock + ' 为 ' + ids.length + ' 个游戏开始解锁：每个游戏' +
+              (countOpt.value > 0 ? '解锁 ' + countOpt.value + ' 个成就' : '解锁全部剩余成就') + '，' + tail);
+            lines.push('到点前请保持本工具和 Steam 都开着；中途可以在标题栏的定时任务里逐个取消，已经解锁的不会回退。');
+          }
           summaryText.textContent = lines.join('\n');
         }
       }
@@ -2834,21 +2995,26 @@
     if (gamesBox) gamesBox.addEventListener('change', syncAll);
 
     el.addEventListener('click', function (e) {
-      var quick = e.target.closest ? e.target.closest('[data-quick]') : null;
-      if (quick) {
-        var vs = String(quick.getAttribute('data-quick')).split(':');
-        var h = Math.floor(Number(vs[0]));
-        var m = Math.floor(Number(vs[1]));
-        if (hourInput) hourInput.value = String(isFinite(h) ? h : 0);
-        if (minuteInput) minuteInput.value = String(isFinite(m) ? m : 0);
-        if (secondInput) secondInput.value = '0';
-        syncAll();
-        return;
-      }
-      var roleHit = e.target.closest ? e.target.closest('[data-role]') : null;
-      var role = roleHit ? roleHit.getAttribute('data-role') : '';
+      var hit = e.target.closest ? e.target.closest('[data-role]') : null;
+      var role = hit ? hit.getAttribute('data-role') : '';
       if (role === 'cancel') {
         closeModal();
+        return;
+      }
+      if (role === 'achGame') {
+        var pickId = Number(hit.getAttribute('data-id'));
+        if (isFinite(pickId) && pickId > 0) {
+          activeId = pickId;
+          mountedFor = '';
+          syncAll();
+        }
+        return;
+      }
+      if (role === 'achAll' || role === 'achNone') {
+        if (currentPick) {
+          if (role === 'achAll') currentPick.all();
+          else currentPick.none();
+        }
         return;
       }
       if (role === 'all' || role === 'none') {
@@ -2874,15 +3040,28 @@
         return;
       }
       if (role === 'ok') {
-        var ids = pickedIds();
+        var ids = pickedIdList();
         if (ids.length === 0) {
           toast('warn', '还没有选游戏', '先在列表里勾选至少一个游戏。');
           return;
         }
+        var manual = sel.mode === 1;
         var target = targetDate();
         var gaps = schedGaps();
-        var gap = gaps[sel.gap] || gaps[1];
+        var gap = gaps[sel.gap] || gaps[0];
         var countOpt = SCHEDULE_BATCH_COUNTS[sel.count] || SCHEDULE_BATCH_COUNTS[0];
+        var missing = [];
+        if (manual) {
+          for (var mi = 0; mi < ids.length; mi++) {
+            if (pickedAchIds(ids[mi]).length === 0) missing.push(gameName(ids[mi]));
+          }
+          if (missing.length > 0) {
+            toast('warn', '还有游戏没挑成就',
+              '给「' + missing.slice(0, 3).join('」「') + '」' + (missing.length > 3 ? ' 等 ' + missing.length + ' 个游戏' : '') +
+              '至少勾选一个成就，或者取消勾选它们。');
+            return;
+          }
+        }
         var payload = {
           at: Math.floor(target.getTime() / 1000),
           minGap: gap.min,
@@ -2892,31 +3071,40 @@
         };
         for (var gi = 0; gi < ids.length; gi++) {
           var gid = ids[gi];
-          var nm = 'App ' + gid;
-          for (var gj = 0; gj < games.length; gj++) {
-            if (num(games[gj].id, 0) === gid) { nm = games[gj].name || nm; break; }
+          var one = {
+            appId: gid,
+            gameName: gameName(gid),
+            count: 0,
+            rareOnly: false,
+            rarePct: RARE_PCT
+          };
+          if (manual) {
+            one.achievements = pickedAchIds(gid);
+          } else {
+            one.count = countOpt.value;
           }
-          payload.games.push({ appId: gid, gameName: nm, count: countOpt.value, rareOnly: false, rarePct: RARE_PCT });
+          payload.games.push(one);
         }
         closeModal();
         if (state.mock) {
-          var now = payload.at;
-          for (var mi = 0; mi < payload.games.length; mi++) {
-            var mg = payload.games[mi];
+          var at = payload.at;
+          for (var si = 0; si < payload.games.length; si++) {
+            var mg = payload.games[si];
             state.schedule.jobs = state.schedule.jobs.concat([{
-              id: 'mock-' + String(Date.now()) + '-' + String(mi),
+              id: 'mock-' + String(Date.now()) + '-' + String(si),
               appId: mg.appId,
               gameName: mg.gameName,
-              at: now,
+              at: at,
               count: mg.count,
               minGap: payload.minGap,
-              maxGap: payload.maxGap
+              maxGap: payload.maxGap,
+              achievements: mg.achievements || null
             }]);
           }
           renderScheduleChip();
           renderStatus();
           toast('success', '已排入定时解锁',
-            payload.games.length + ' 个游戏将在 ' + clockLabel(new Date(now * 1000)) + ' 开始解锁。');
+            payload.games.length + ' 个游戏将在 ' + clockLabel(new Date(at * 1000)) + ' 开始解锁。');
           return;
         }
         send('schedule/createBatch', payload);
@@ -2926,7 +3114,7 @@
     els.modalRoot.innerHTML = '';
     els.modalRoot.appendChild(el);
     setHidden(els.modalRoot, false);
-    modalState = { el: el, prevFocus: prevFocus, kind: 'scheduleBatch' };
+    modalState = { el: el, prevFocus: prevFocus, kind: 'scheduleBatch', poolHandler: poolHandler };
     syncAll();
     window.setTimeout(function () {
       if (okBtn && okBtn.focus) okBtn.focus();
@@ -3707,7 +3895,7 @@
   }
 
   window.SAM = {
-    version: '1.9.2',
+    version: '1.9.3',
     handleEvent: handleEvent,
     mock: enterMock,
     getState: function () {

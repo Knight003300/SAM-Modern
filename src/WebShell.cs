@@ -1197,6 +1197,11 @@ namespace SAM.Modern
                 this.CancelSchedule(message);
                 return;
             }
+            if (string.Equals(cmd, "schedule/pool", StringComparison.Ordinal))
+            {
+                this.SendSchedulePool(message);
+                return;
+            }
             Log.Write("unhandled command: " + cmd);
         }
 
@@ -1242,7 +1247,8 @@ namespace SAM.Modern
             job.CreatedAt = now;
 
             // 夹紧，防止前端传进离谱值让 worker 睡上好几天。
-            if (job.MinGap < 1) job.MinGap = 1;
+            // 间隔允许 0：前端「立刻解锁」传的就是 minGap = maxGap = 0，worker 会连着写完不等待。
+            if (job.MinGap < 0) job.MinGap = 0;
             if (job.MaxGap < job.MinGap) job.MaxGap = job.MinGap;
             if (job.MaxGap > 7 * 24 * 3600) job.MaxGap = 7 * 24 * 3600;
             if (job.MinGap > job.MaxGap) job.MinGap = job.MaxGap;
@@ -1376,6 +1382,73 @@ namespace SAM.Modern
             Log.Write("schedule: cancelled " + id);
             this.Channel.Toast("success", "已取消定时", "这条定时解锁任务已删除。");
             if (this._scheduler != null) this._scheduler.Publish();
+        }
+
+        /// <summary>
+        /// 按 appId 从本地缓存里读出这个游戏的成就清单，供「定时批量解锁」为每个游戏单独挑成就。
+        /// 只读 cache/game-&lt;appId&gt;.json（以前打开过这个游戏才有），不连 Steam，
+        /// 所以游戏库窗口里可以同步跑，不用等 stats 回调。
+        /// </summary>
+        private void SendSchedulePool(Dictionary<string, object> message)
+        {
+            long appId = (long)JsonParser.GetNumber(message, "appId", 0);
+            var b = new JsonBuilder();
+            b.BeginObject().Name("ev").Str("schedulePool").Name("appId").Num(appId);
+
+            var items = new List<object>();
+            bool cached = false;
+            if (appId > 0)
+            {
+                try
+                {
+                    string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cache",
+                        "game-" + appId.ToString(CultureInfo.InvariantCulture) + ".json");
+                    if (File.Exists(path))
+                    {
+                        var root = JsonParser.ParseObject(File.ReadAllText(path));
+                        if (root != null && (long)JsonParser.GetNumber(root, "appId", -1) == appId)
+                        {
+                            object raw;
+                            if (root.TryGetValue("achievements", out raw))
+                            {
+                                var list = raw as List<object>;
+                                if (list != null)
+                                {
+                                    cached = true;
+                                    items = list;
+                                }
+                            }
+                        }
+                    }
+                }
+                catch (Exception error)
+                {
+                    Log.Write("schedule: pool read failed appId=" + appId, error);
+                }
+            }
+
+            b.Name("cached").Bool(cached);
+            b.Name("achievements").BeginArray();
+            int listed = 0;
+            foreach (object item in items)
+            {
+                var def = item as Dictionary<string, object>;
+                if (def == null) continue;
+                // 已经解锁的、受保护的成就没法（也不需要）再定时解锁，直接不列出来。
+                if (JsonParser.GetBool(def, "achieved", false)) continue;
+                if (JsonParser.GetBool(def, "protect", false)) continue;
+                b.BeginObject()
+                    .Name("id").Str(JsonParser.GetString(def, "id"))
+                    .Name("name").Str(JsonParser.GetString(def, "name"))
+                    .Name("rarity").Num(JsonParser.GetNumber(def, "rarity", -1.0))
+                    .EndObject();
+                listed++;
+            }
+            b.EndArray();
+            b.EndObject();
+
+            Log.Write("schedule: pool appId=" + appId + " cached=" + cached + " listed=" + listed);
+            this.Channel.Send(b);
         }
 
         /// <summary>把 unix 秒按本机时区格式化成「MM-dd HH:mm」，只用于提示文案。</summary>
