@@ -1246,6 +1246,7 @@ namespace SAM.Modern
             job.Count = (int)JsonParser.GetNumber(message, "count", 0);
             job.RareOnly = JsonParser.GetBool(message, "rareOnly", false);
             job.RarePct = JsonParser.GetNumber(message, "rarePct", 5.0);
+            job.Order = (int)Math.Round(JsonParser.GetNumber(message, "order", 0));
             job.Jitter = (int)JsonParser.GetNumber(message, "jitter", 0);
             job.Language = JsonParser.GetString(message, "language");
             if (string.IsNullOrEmpty(job.Language)) job.Language = "english";
@@ -1262,6 +1263,8 @@ namespace SAM.Modern
             if (job.RarePct > 100) job.RarePct = 100;
             if (job.Jitter < 0) job.Jitter = 0;
             if (job.Jitter > 3600) job.Jitter = 3600;
+            if (job.Order < 0) job.Order = 0;
+            if (job.Order > 2) job.Order = 2;
 
             object rawList;
             if (message.TryGetValue("achievements", out rawList))
@@ -1298,7 +1301,7 @@ namespace SAM.Modern
                 return;
             }
             Log.Write("schedule: created " + job.Id + " appId=" + job.AppId + " at=" + job.At +
-                      " count=" + job.Count + " explicit=" + job.Achievements.Count);
+                      " count=" + job.Count + " explicit=" + job.Achievements.Count + " order=" + job.Order);
             this.Channel.Toast("success", "已排入定时解锁",
                 "《" + job.GameName + "》将在 " + FormatScheduleTime(job.At) + " 开始解锁。");
             if (this._scheduler != null) this._scheduler.Publish();
@@ -1341,6 +1344,7 @@ namespace SAM.Modern
                 if (one.ContainsKey("minGap") == false) one["minGap"] = JsonParser.GetNumber(message, "minGap", 15);
                 if (one.ContainsKey("maxGap") == false) one["maxGap"] = JsonParser.GetNumber(message, "maxGap", 45);
                 if (one.ContainsKey("jitter") == false) one["jitter"] = JsonParser.GetNumber(message, "jitter", 0);
+                if (one.ContainsKey("order") == false) one["order"] = JsonParser.GetNumber(message, "order", 0);
                 if (one.ContainsKey("language") == false) one["language"] = JsonParser.GetString(message, "language");
 
                 ScheduleJob job = this.BuildSchedule(one, true);

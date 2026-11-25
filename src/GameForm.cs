@@ -509,6 +509,10 @@ namespace SAM.Modern
             int delay = (int)Math.Round(JsonParser.GetNumber(message, "delay", 5));
             bool rareOnly = JsonParser.GetBool(message, "rareOnly", false);
             double rarePct = JsonParser.GetNumber(message, "rarePct", DefaultRarePercent);
+            // 解锁顺序：0 = 随机（默认），1 = 稀有度低→高（常见先），2 = 稀有度高→低（稀有先）
+            int order = (int)Math.Round(JsonParser.GetNumber(message, "order", 0));
+            if (order < 0) order = 0;
+            if (order > 2) order = 2;
 
             // 自定义间隔可以按「天」描述，所以上限放宽到 7 天
             if (minGap < 1) minGap = 1;
@@ -589,13 +593,50 @@ namespace SAM.Modern
                     return;
                 }
 
-                // 顺序也打乱，看起来才像「随机」
-                for (int i = candidates.Count - 1; i > 0; i--)
+                if (order == 0)
                 {
-                    int j = this._unlockRandom.Next(i + 1);
-                    string tmp = candidates[i];
-                    candidates[i] = candidates[j];
-                    candidates[j] = tmp;
+                    // 顺序也打乱，看起来才像「随机」
+                    for (int i = candidates.Count - 1; i > 0; i--)
+                    {
+                        int j = this._unlockRandom.Next(i + 1);
+                        string tmp = candidates[i];
+                        candidates[i] = candidates[j];
+                        candidates[j] = tmp;
+                    }
+                }
+                else
+                {
+                    // 按全服解锁率排：order=1 低→高（常见先、越稀有越靠后），order=2 反过来。
+                    // 读不到百分比的排到最后 —— 否则它们会莫名其妙抢在最前面。
+                    var percents = new Dictionary<string, float>(StringComparer.Ordinal);
+                    foreach (string id in candidates)
+                    {
+                        float percent = -1f;
+                        try
+                        {
+                            if (api.GetAchievementAchievedPercent(id, out percent) == false) percent = -1f;
+                        }
+                        catch (Exception error)
+                        {
+                            Log.Write("GetAchievementAchievedPercent failed: " + id, error);
+                            percent = -1f;
+                        }
+                        percents[id] = percent;
+                    }
+                    // order=1「常见 → 稀有」：全服解锁率高的（常见）先解锁，百分比要从大到小；
+                    // order=2「稀有 → 常见」反过来。别被「稀有度」这三个字带偏。
+                    bool ascending = order == 2;
+                    candidates.Sort(delegate(string a, string b)
+                    {
+                        float pa, pb;
+                        if (percents.TryGetValue(a, out pa) == false) pa = -1f;
+                        if (percents.TryGetValue(b, out pb) == false) pb = -1f;
+                        bool ka = pa > 0f;
+                        bool kb = pb > 0f;
+                        if (ka != kb) return ka ? -1 : 1;
+                        if (ka == false) return 0;
+                        return ascending ? pa.CompareTo(pb) : pb.CompareTo(pa);
+                    });
                 }
                 if (count > 0 && count < candidates.Count)
                 {
@@ -613,12 +654,15 @@ namespace SAM.Modern
             Log.Write("random unlock start: " + this._unlockQueue.Count + " achievements"
                 + (explicitIds.Count > 0 ? " (explicit " + explicitIds.Count + ")" : "")
                 + ", gap " + minGap + "-" + maxGap + "s, first delay " + delay + "s"
-                + (rareOnly ? ", rare only <" + FormatPercent(rarePct) : ""));
+                + (rareOnly ? ", rare only <" + FormatPercent(rarePct) : "")
+                + (order == 0 ? "" : (order == 1 ? ", order common-first" : ", order rare-first")));
 
             this.SendUnlockRun(delay, null, 0);
+            string orderText = order == 0 ? ""
+                : (order == 1 ? "（按稀有度从常见到稀有排序）" : "（按稀有度从稀到常见排序）");
             this.Channel.Status((explicitIds.Count > 0 ? "指定解锁已开始：共 " : "随机解锁已开始：共 ")
                 + this._unlockQueue.Count
-                + (explicitIds.Count > 0 ? " 个指定成就" : (rareOnly ? " 个稀有成就" : " 个成就")) + "，间隔 "
+                + (explicitIds.Count > 0 ? " 个指定成就" : (rareOnly ? " 个稀有成就" : " 个成就")) + orderText + "，间隔 "
                 + FormatGap(minGap) + " – " + FormatGap(maxGap) + "，"
                 + (delay > 0 ? "约 " + FormatGap(delay) + "后解锁第一个。" : "正在解锁第一个…"), true);
 

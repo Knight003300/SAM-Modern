@@ -20,6 +20,7 @@ namespace SAM.Modern
         public int Count;            // 0 = 全部剩余
         public bool RareOnly;
         public double RarePct = 5.0;
+        public int Order;            // 0 = 随机顺序，1 = 稀有度低→高（常见先），2 = 稀有度高→低（稀有先）
         public string Language = "english";
         public int Jitter;           // 0..N 秒随机错开，多个游戏同一分钟时用
         public List<string> Achievements = new List<string>();  // 显式指定时优先
@@ -75,6 +76,7 @@ namespace SAM.Modern
                 .Name("count").Num(job.Count)
                 .Name("rareOnly").Bool(job.RareOnly)
                 .Name("rarePct").Num(job.RarePct)
+                .Name("order").Num(job.Order)
                 .Name("language").Str(job.Language)
                 .Name("jitter").Num(job.Jitter)
                 .Name("createdAt").Num(job.CreatedAt)
@@ -104,6 +106,9 @@ namespace SAM.Modern
             job.Count = (int)JsonParser.GetNumber(o, "count", 0);
             job.RareOnly = JsonParser.GetBool(o, "rareOnly", false);
             job.RarePct = JsonParser.GetNumber(o, "rarePct", 5.0);
+            job.Order = (int)JsonParser.GetNumber(o, "order", 0);
+            if (job.Order < 0) job.Order = 0;
+            if (job.Order > 2) job.Order = 2;
             job.Language = JsonParser.GetString(o, "language");
             if (string.IsNullOrEmpty(job.Language)) job.Language = "english";
             job.Jitter = (int)JsonParser.GetNumber(o, "jitter", 0);
@@ -583,7 +588,8 @@ namespace SAM.Modern
                 .Name("minGap").Num(job.MinGap)
                 .Name("maxGap").Num(job.MaxGap)
                 .Name("rareOnly").Bool(job.RareOnly)
-                .Name("rarePct").Num(job.RarePct);
+                .Name("rarePct").Num(job.RarePct)
+                .Name("order").Num(job.Order);
             // 点名解锁时前端要知道这条任务指定了哪些成就（列表里显示「指定 N 个」）
             if (job.Achievements != null && job.Achievements.Count > 0)
             {

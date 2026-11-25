@@ -1,5 +1,5 @@
 {
-  "description": "Steam 成就管理器 · 现代化重构版 —— 基于 gibbed/SteamAchievementManager 的二次修改版（WebView2 界面 + 完整汉化 + 随机时间解锁 + 定时解锁 + 指定成就 + 稀有成就）",
+  "description": "Steam 成就管理器 · 现代化重构版 —— 基于 gibbed/SteamAchievementManager 的二次修改版（WebView2 界面 + 完整汉化 + 随机时间解锁 + 定时解锁 + 指定成就 + 按稀有度排序解锁 + 稀有成就）",
   "topics": [
     "steam",
     "steam-achievement-manager",
@@ -11,7 +11,7 @@
     "achievements"
   ],
   "homepage": "https://github.com/Knight003300/SAM-Modern",
-  "tag": "v1.9.7",
-  "releaseName": "SAM Modern v1.9.7 · 扫描不到的游戏现在能找到 / 能手动打开",
-  "releaseBody": "v1.9.7 重做了游戏库扫描的判定条件：不再只信 Steam 的「已订阅」状态，本机装过、跑过的游戏也会补进来（实测本机 129 → 165 个）；仍然找不到的，工具栏新增「按 AppID 打开」手动兜底。\n\n**下载 `SAM-Modern-zhCN.zip`，解压后双击 `SAM.Modern.exe` 即可运行**（免安装，需已安装并登录 Steam）。\n\n### 修复 · 有些游戏扫不出来（v1.9.7）\n- 以前是「拿 Steam 全量目录（9.5 万条）逐条问 Steam 有没有拥有」，Steam 说没有就直接跳过。可这个接口只代表「当前账号现在能不能玩」——家庭共享被收回、免费周末结束、已退款、或者游戏压根不在 Steam 那份老目录里，都会被误判成「没有」。\n- 现在额外读本机痕迹：成就架构 `appcache\\stats\\UserGameStatsSchema_*.bin`（跑过就有）、安装清单 `appmanifest_*.acf`、封面缓存 `appcache\\librarycache`、以及 `userdata\\config\\localconfig.vdf` 里记录过的 appid。**本机实测从 129 个补到 165 个**。\n- 补出来的是 Don't Starve Together、Project Zomboid、Goose Goose Duck、PlateUp!、Marvel Rivals、Soundpad、少女怪奇事件簿这些以前根本不显示的。\n\n### 新增 · 未在库中标签（v1.9.7）\n- 补出来的条目里，如果 Steam 说当前账号确实不拥有（家庭共享被收回、免费周末结束、已退款），卡片会带红色「未在库中」标签，悬停会说明原因。\n- 能点进去看成就，但保存多半会失败 —— 这是 Steam 的限制，不是工具的问题。\n\n### 新增 · 按 AppID 打开（v1.9.7）\n- 游戏库工具栏新增按钮，填 AppID 就能直接打开那个游戏（Steam 库页面右键游戏 →「属性」→「常规」里能看到 AppID）。\n- 这是最后的兜底：任何原因导致列表里没有，都能手填进去。只接受数字，非法字符会被过滤并提示。\n- 如果打开后提示「架构文件不存在」，说明这台电脑还没运行过该游戏 —— 先在 Steam 里启动一次（进到主菜单即可）再回来。\n\n### 改进 · 工具类 app 归到「其他」（v1.9.7）\n- Dedicated Server、Authoring Tools、SDK、Entitlement 这类不是游戏的东西，名字匹配到就直接归「其他」，不混在正式版里。\n\n### 注意\n- **定时解锁到点时本工具必须还开着**（最小化、隐藏都行，但进程不能退出），并且 Steam 要在运行。\n- 扫描以本机痕迹为准：游戏必须在这台电脑上装过或跑过（哪怕只启动过一次）。纯云端、从没在这台机器上出现过的游戏扫不出来，请用「按 AppID 打开」。\n\n### 说明\n- 本次只改了游戏库的扫描逻辑与工具栏，其余界面与数据协议保持兼容，可直接覆盖旧版本目录使用。\n- 本项目是 [gibbed/SteamAchievementManager](https://github.com/gibbed/SteamAchievementManager) 的二次修改版，保留并直接复用上游 `SAM.API`，界面层全部重写。上游 zlib License。\n- 首次运行可能被 SmartScreen 拦一下（无信誉记录的新程序），点「更多信息 → 仍要运行」。\n- 只修改本地 Steam 用户数据，不上传、不联网写库。"
+  "tag": "v1.9.8",
+  "releaseName": "SAM Modern v1.9.8 · 按稀有度排队解锁（常见先 / 稀有先）",
+  "releaseBody": "v1.9.8 给三个解锁弹窗（随机时间解锁 / 定时解锁 / 定时批量解锁）都加了「解锁顺序」：除了原来的随机顺序，还能让成就按全服稀有度排队 —— 常见 → 稀有（解锁率高的先解锁，最稀有的压到最后）或 稀有 → 常见（先啃硬骨头）。间隔依旧随机，所以看上去还是「随机时间」解锁，只是先后有讲究。\\n\\n**下载 `SAM-Modern-zhCN.zip`，解压后双击 `SAM.Modern.exe` 即可运行**（免安装，需已安装并登录 Steam）。\\n\\n### 新增 · 解锁顺序（v1.9.8）\\n- 随机时间解锁、定时解锁、定时批量解锁三个弹窗都多了一组「解锁顺序」：**随机顺序**（默认，和以前完全一样）、**常见 → 稀有**、**稀有 → 常见**。\\n- 稀有度按 Steam 的**全服解锁率**排（就是成就页右侧那个「稀有 x.x%」）：百分比越高越常见。Steam 没给出百分比的成就排在最后，不会乱序。\\n- 间隔仍然是随机的 —— 所以整轮看起来还是「随机时间」解锁，只是先后按稀有度排队。适合「先刷掉大众成就、把稀有成就留到最后压轴」或者「先把最稀有的几个解锁掉」。\\n- 选「指定成就」时这一组会自动隐藏：那时顺序就是你勾选的顺序。\\n\\n### 改进 · 任务列表标出顺序（v1.9.8）\\n- 定时任务行会多显示「常见先」或「稀有先」，随机顺序不加字 —— 一眼能看出这条任务按什么顺序排的。\\n- 指定成就的任务仍只显示「指定 N 个」。\\n\\n### 说明\\n- 本次只改了三个解锁弹窗与任务列表的文案，其余界面与数据协议保持兼容，可直接覆盖旧版本目录使用；旧任务文件没有顺序字段时按随机顺序处理。\\n- **定时解锁到点时本工具必须还开着**（最小化、隐藏都行，但进程不能退出），并且 Steam 要在运行。\\n- 本项目是 [gibbed/SteamAchievementManager](https://github.com/gibbed/SteamAchievementManager) 的二次修改版，保留并直接复用上游 `SAM.API`，界面层全部重写。上游 zlib License。\\n- 首次运行可能被 SmartScreen 拦一下（无信誉记录的新程序），点「更多信息 → 仍要运行」。\\n- 只修改本地 Steam 用户数据，不上传、不联网写库。"
 }

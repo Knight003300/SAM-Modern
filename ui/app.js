@@ -33,6 +33,18 @@
     { label: '稀有 < 5%', pct: 5 },
     { label: '稀有 < 10%', pct: 10 }
   ];
+  // 解锁顺序：0 = 随机（默认），1 = 常见先（全服解锁率高的先），2 = 稀有先。
+  // 只影响「按数量随机」模式；指定成就时按你勾选的顺序来。
+  var ORDER_OPTIONS = [
+    { label: '随机顺序' },
+    { label: '常见 → 稀有' },
+    { label: '稀有 → 常见' }
+  ];
+  function orderText(order) {
+    if (order === 1) return '（按稀有度从常见到稀有排序）';
+    if (order === 2) return '（按稀有度从稀到常见排序）';
+    return '';
+  }
 
   /* ---------------------------------------------------------------------------
      2. 单一数据源
@@ -1830,7 +1842,7 @@
   function openRandomModal(pool) {
     closeModal();
     var list = Array.isArray(pool) ? pool : [];
-    var sel = { count: 0, gap: 1, rare: 0, mode: 0 };
+    var sel = { count: 0, gap: 1, rare: 0, mode: 0, order: 0 };
     var picked = {};
     var el = document.createElement('div');
     el.className = 'modal modal--wide';
@@ -1895,6 +1907,7 @@
     body.push('<div data-role="randomBox">');
     body.push(groupHtml('rare', '解锁范围', rareItems()));
     body.push(groupHtml('count', '解锁数量', counts));
+    body.push(groupHtml('order', '解锁顺序', ORDER_OPTIONS));
     body.push('</div>');
     body.push(groupHtml('gap', '解锁间隔', RANDOM_GAPS));
 
@@ -2026,7 +2039,7 @@
           summaryText.textContent = '当前范围里没有可解锁的成就。换一个更大的范围试试。';
         } else {
           var lines = [];
-          lines.push('将解锁 ' + plan.n + ' 个成就，每两个之间随机等 ' + fmtGap(plan.lo) +
+          lines.push('将解锁 ' + plan.n + ' 个成就' + orderText(sel.order) + '，每两个之间随机等 ' + fmtGap(plan.lo) +
             (plan.hi > plan.lo ? '到 ' + fmtGap(plan.hi) : '') +
             '，预计耗时 ' + durationText(plan) + '。');
           if (rarityKnown) {
@@ -2128,7 +2141,8 @@
           maxGap: hi,
           delay: Math.min(5, lo),
           rareOnly: rarePct > 0,
-          rarePct: rarePct > 0 ? rarePct : RARE_PCT
+          rarePct: rarePct > 0 ? rarePct : RARE_PCT,
+          order: sel.order
         });
       }
     });
@@ -2161,7 +2175,8 @@
       maxGap: cfg.maxGap,
       delay: cfg.delay,
       rareOnly: !!cfg.rareOnly,
-      rarePct: cfg.rarePct || RARE_PCT
+      rarePct: cfg.rarePct || RARE_PCT,
+      order: cfg.order || 0
     };
     if (cfg.achievements && cfg.achievements.length > 0) payload.achievements = cfg.achievements;
     send('game/unlockRandom', payload);
@@ -2186,6 +2201,20 @@
       }
     } else {
       pool = randomCandidates();
+      if (cfg.order === 1 || cfg.order === 2) {
+        // 演示模式也按稀有度排：order=1 常见先（解锁率高→低），order=2 稀有先。
+        // 读不到全服解锁率的排最后，免得它们抢在最前面。
+        var asc = cfg.order === 2;
+        pool = pool.slice().sort(function (a, b) {
+          var pa = (a && typeof a.rarity === 'number' && a.rarity >= 0) ? a.rarity : -1;
+          var pb = (b && typeof b.rarity === 'number' && b.rarity >= 0) ? b.rarity : -1;
+          var ka = pa >= 0;
+          var kb = pb >= 0;
+          if (ka !== kb) return ka ? -1 : 1;
+          if (!ka) return 0;
+          return asc ? pa - pb : pb - pa;
+        });
+      }
       if (cfg.count > 0 && cfg.count < pool.length) pool = pool.slice(0, cfg.count);
     }
     if (pool.length === 0) return;
@@ -2556,8 +2585,12 @@
       bits.push('解锁中 ' + (job.done || 0) + ' / ' + (job.total || 0));
     } else {
       if (explicit > 0) bits.push('指定 ' + explicit + ' 个');
-      else if (job.count > 0) bits.push('解锁 ' + job.count + ' 个');
-      else bits.push('全部剩余');
+      else {
+        if (job.count > 0) bits.push('解锁 ' + job.count + ' 个');
+        else bits.push('全部剩余');
+        if (job.order === 1) bits.push('常见先');
+        else if (job.order === 2) bits.push('稀有先');
+      }
     }
     if (typeof job.minGap === 'number' && typeof job.maxGap === 'number') {
       bits.push((!job.minGap && !job.maxGap) ? '立刻解锁' : '间隔 ' + fmtGap(job.minGap) + '–' + fmtGap(job.maxGap));
@@ -2741,7 +2774,7 @@
   function openScheduleGameModal(pool) {
     closeModal();
     var list = Array.isArray(pool) ? pool : [];
-    var sel = { count: 0, gap: 0, rare: 0, hour: 22, minute: 22, second: 0, mode: 0 };
+    var sel = { count: 0, gap: 0, rare: 0, hour: 22, minute: 22, second: 0, mode: 0, order: 0 };
     var picked = {};
     var el = document.createElement('div');
     el.className = 'modal modal--wide';
@@ -2763,6 +2796,7 @@
     body.push('<div data-role="randomBox">');
     body.push('<div data-role="rareBox">' + optGroupHtml('rare', '解锁范围', schedRareItems(list), 0) + '</div>');
     body.push('<div data-role="countBox">' + optGroupHtml('count', '解锁数量', countOptions(list.length), 0) + '</div>');
+    body.push(optGroupHtml('order', '解锁顺序', ORDER_OPTIONS, 0));
     body.push('</div>');
     body.push('<div data-role="achBox" hidden>' + achPickHtml(list, picked) + '</div>');
     body.push(optGroupHtml('gap', '解锁间隔', schedGaps(), 0));
@@ -2833,7 +2867,7 @@
           summaryText.textContent = '当前范围里没有可解锁的成就。换一个更大的范围试试。';
         } else {
           var lines = [];
-          lines.push('将在 ' + dayLabel(target) + ' ' + clock + ' 开始解锁 ' + n + ' 个成就，' + tail);
+          lines.push('将在 ' + dayLabel(target) + ' ' + clock + ' 开始解锁 ' + n + ' 个成就' + orderText(sel.order) + '，' + tail);
           var pct = (RARE_OPTIONS[sel.rare] || RARE_OPTIONS[0]).pct;
           if (pct > 0) {
             lines.push('候选里的 ' + poolNow.length + ' 个成就都属于全服解锁率低于 ' + pct + '% 的稀有成就。');
@@ -2897,6 +2931,7 @@
           maxGap: gap.max,
           language: state.meta.language || 'english'
         };
+        base.order = sel.order;
         if (manual) {
           var ids = pick.ids();
           if (ids.length === 0) {
@@ -2906,6 +2941,7 @@
           base.count = 0;
           base.rareOnly = false;
           base.rarePct = RARE_PCT;
+          base.order = 0;   // 指定成就按勾选顺序解锁，排序选项不参与
           base.achievements = ids;
           submitSchedule(base);
           return;
@@ -2952,7 +2988,7 @@
 
   function openScheduleBatchModal(games) {
     closeModal();
-    var sel = { gap: 0, count: 0, hour: 22, minute: 22, second: 0, mode: 0 };
+    var sel = { gap: 0, count: 0, hour: 22, minute: 22, second: 0, mode: 0, order: 0 };
     var pickedGames = {};   // appId -> true
     var pickedAch = {};     // appId -> { achievementId: true }
     var pools = {};         // appId -> { loading: bool, cached: bool, list: [] }
@@ -3000,6 +3036,7 @@
 
     body.push('<div data-role="randomBox">');
     body.push(optGroupHtml('count', '每个游戏解锁', SCHEDULE_BATCH_COUNTS, 0));
+    body.push(optGroupHtml('order', '解锁顺序', ORDER_OPTIONS, 0));
     body.push('</div>');
 
     body.push('<div data-role="achBox" hidden>');
@@ -3209,7 +3246,8 @@
             lines.push('每个游戏一个独立进程，各自按你勾选的顺序解锁。到点前请保持本工具和 Steam 都开着。');
           } else {
             lines.push('将在 ' + dayLabel(target) + ' ' + clock + ' 为 ' + ids.length + ' 个游戏开始解锁：每个游戏' +
-              (countOpt.value > 0 ? '解锁 ' + countOpt.value + ' 个成就' : '解锁全部剩余成就') + '，' + tail);
+              (countOpt.value > 0 ? '解锁 ' + countOpt.value + ' 个成就' : '解锁全部剩余成就') +
+              orderText(sel.order) + '，' + tail);
             lines.push('到点前请保持本工具和 Steam 都开着；中途可以在标题栏的定时任务里逐个取消，已经解锁的不会回退。');
           }
           summaryText.textContent = lines.join('\n');
@@ -3299,6 +3337,7 @@
           minGap: gap.min,
           maxGap: gap.max,
           language: state.meta.language || 'english',
+          order: manual ? 0 : sel.order,
           games: []
         };
         for (var gi = 0; gi < ids.length; gi++) {
@@ -3330,6 +3369,7 @@
               count: mg.count,
               minGap: payload.minGap,
               maxGap: payload.maxGap,
+              order: payload.order,
               achievements: mg.achievements || null
             }]);
           }
@@ -4242,7 +4282,7 @@
   }
 
   window.SAM = {
-    version: '1.9.7',
+    version: '1.9.8',
     handleEvent: handleEvent,
     mock: enterMock,
     getState: function () {

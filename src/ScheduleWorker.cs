@@ -166,6 +166,8 @@ namespace SAM.Modern
 
             var api = host.Client.SteamUserStats;
             var candidates = new List<string>();
+            // 按稀有度排序时才需要每个成就的全服解锁率，顺便缓存起来，排序不用再问一遍 Steam。
+            var percents = new Dictionary<string, float>(StringComparer.Ordinal);
             foreach (var def in definitions)
             {
                 if ((def.Permission & 3) != 0) continue;
@@ -174,25 +176,49 @@ namespace SAM.Modern
                 catch (Exception) { continue; }
                 if (current) continue;
 
-                if (job.RareOnly)
+                float percent = -1f;
+                bool percentKnown = false;
+                if (job.RareOnly || job.Order != 0)
                 {
-                    float percent;
-                    bool rare = false;
-                    try { rare = api.GetAchievementAchievedPercent(def.Id, out percent) && percent > 0f && percent < job.RarePct; }
-                    catch (Exception) { }
-                    if (rare == false) continue;
+                    try { percentKnown = api.GetAchievementAchievedPercent(def.Id, out percent) && percent > 0f; }
+                    catch (Exception) { percentKnown = false; }
+                    if (percentKnown == false) percent = -1f;
                 }
+                if (job.RareOnly && percentKnown == false) continue;
+                if (job.RareOnly && percent >= job.RarePct) continue;
 
+                if (percentKnown) percents[def.Id] = percent;
                 candidates.Add(def.Id);
             }
 
-            var random = new Random();
-            for (int i = candidates.Count - 1; i > 0; i--)
+            if (job.Order == 0)
             {
-                int j = random.Next(i + 1);
-                string temp = candidates[i];
-                candidates[i] = candidates[j];
-                candidates[j] = temp;
+                var random = new Random();
+                for (int i = candidates.Count - 1; i > 0; i--)
+                {
+                    int j = random.Next(i + 1);
+                    string temp = candidates[i];
+                    candidates[i] = candidates[j];
+                    candidates[j] = temp;
+                }
+            }
+            else
+            {
+                // 按全服解锁率排：Order=1 常见先、越稀有越靠后；Order=2 反过来。
+                // 读不到百分比的排最后，免得它们莫名其妙抢在最前面。
+                // Order=1「常见 → 稀有」= 解锁率高的先，百分比从大到小；Order=2 反过来。
+                bool ascending = job.Order == 2;
+                candidates.Sort(delegate(string a, string b)
+                {
+                    float pa, pb;
+                    if (percents.TryGetValue(a, out pa) == false) pa = -1f;
+                    if (percents.TryGetValue(b, out pb) == false) pb = -1f;
+                    bool ka = pa > 0f;
+                    bool kb = pb > 0f;
+                    if (ka != kb) return ka ? -1 : 1;
+                    if (ka == false) return 0;
+                    return ascending ? pa.CompareTo(pb) : pb.CompareTo(pa);
+                });
             }
 
             int take = job.Count > 0 ? Math.Min(job.Count, candidates.Count) : candidates.Count;
