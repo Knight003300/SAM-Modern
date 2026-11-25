@@ -51,6 +51,11 @@ namespace SAM.Modern
                     CatalogProbe.Run();
                     return;
                 }
+                if (string.Equals(arg, "--probe-family", StringComparison.OrdinalIgnoreCase))
+                {
+                    CatalogProbe.RunFamily(Steam.GetInstallPath());
+                    return;
+                }
                 if (string.Equals(arg, "--probe-switch", StringComparison.OrdinalIgnoreCase))
                 {
                     if (i + 2 < args.Length)

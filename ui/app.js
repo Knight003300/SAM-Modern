@@ -488,6 +488,8 @@
         id: g && g.id !== undefined ? g.id : 0,
         name: g && g.name ? String(g.name) : '未命名游戏',
         type: g && TYPE_LABEL[g.type] ? g.type : 'junk',
+        // 本机装过但 Steam 说当前账号没拥有：卡片上要打「未在库中」。
+        unowned: !!(g && g.unowned),
         capsule: g && g.capsule ? String(g.capsule) : null,
         capsules: g && Array.isArray(g.capsules) ? g.capsules.map(String) : null
       };
@@ -958,15 +960,19 @@
     var hue = hash32('' + g.id) % 300;
     var out = [];
     out.push('<button type="button" class="game-card" data-id="' + esc(g.id) + '"');
-    out.push(' title="' + esc(g.name) + '">');
+    out.push(' title="' + esc(g.unowned
+      ? g.name + '（本机装过，但 Steam 显示当前账号未拥有：可能是家庭共享被收回、免费周末结束或已退款）'
+      : g.name) + '">');
     out.push('<span class="game-card__cover" data-mono="' + esc(mono) + '">');
     var cover = coverImgHtml(g, true);
     out.push(cover || fallbackCover(mono, hue));
     out.push('</span>');
     // 正式版占绝大多数，逐张标注等于没标；只有例外（试玩/模组/其他）才显示标签。
-    out.push(g.type && g.type !== 'normal'
-      ? '<span class="game-card__tags">' + typeTagHtml(g.type) + '</span>'
-      : '');
+    // 「未在库中」是扫描兜底带出来的：本机装过/跑过，但 Steam 说当前账号没拥有（家庭共享、免费周末结束等）。
+    var tags = [];
+    if (g.type && g.type !== 'normal') tags.push(typeTagHtml(g.type));
+    if (g.unowned) tags.push('<span class="gtag gtag--unowned">未在库中</span>');
+    out.push(tags.length ? '<span class="game-card__tags">' + tags.join('') + '</span>' : '');
     out.push('<span class="game-card__name">' + esc(g.name) + '</span>');
     out.push('<span class="game-card__meta">' + esc(cardMetaText(g)) + '</span>');
     out.push('<span class="game-card__hover"></span>');
@@ -3673,6 +3679,7 @@
     els.pickerSearch = document.getElementById('pickerSearch');
     els.pickerSearchClear = document.getElementById('pickerSearchClear');
     els.pickerTypeSeg = document.getElementById('pickerTypeSeg');
+    els.btnOpenId = document.getElementById('btnOpenId');
     els.btnScheduleAll = document.getElementById('btnScheduleAll');
     els.btnReload = document.getElementById('btnReload');
     els.gameTabs = document.getElementById('gameTabs');
@@ -3802,6 +3809,105 @@
     return false;
   }
 
+  /* ---------- 按 AppID 打开：扫描不到的游戏的手动兜底 ---------- */
+
+  // 扫描靠的是 Steam 的「订阅」状态和本机痕迹。家庭共享刚被收回、免费周末结束、
+  // 或者游戏刚买还没启动过，都可能让它扫不出来 —— 这种情况下让用户自己填 AppID 最直接。
+  function openAppIdModal() {
+    closeModal();
+    var el = document.createElement('div');
+    el.className = 'modal';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'true');
+
+    var parts = [];
+    parts.push('<div class="modal__body">');
+    parts.push('<div class="modal__head">');
+    parts.push('<span class="modal__ico modal__ico--info">' + ICON.info + '</span>');
+    parts.push('<h2 class="modal__title">按 AppID 打开</h2>');
+    parts.push('</div>');
+    parts.push('<p class="modal__text">游戏没出现在列表里时，可以直接填它的 AppID。' +
+      '在 Steam 库页面右键游戏 →「属性」→「常规」里能看到 AppID。</p>');
+    parts.push('<label class="appid-field">');
+    parts.push('<span class="appid-field__cap">AppID</span>');
+    parts.push('<input class="appid-field__input" type="text" inputmode="numeric" ' +
+      'autocomplete="off" spellcheck="false" placeholder="例如 322330" data-role="appid" />');
+    parts.push('</label>');
+    parts.push('<p class="gap-custom__hint" data-role="hint">只能填数字。打开后如果读不到成就架构，' +
+      '说明这台电脑还没运行过该游戏 —— 先在 Steam 里启动一次再回来。</p>');
+    parts.push('</div>');
+    parts.push('<div class="modal__foot">');
+    parts.push('<button type="button" class="btn btn--ghost" data-role="cancel">取消</button>');
+    parts.push('<button type="button" class="btn btn--primary" data-role="ok">打开</button>');
+    parts.push('</div>');
+    el.innerHTML = parts.join('');
+
+    var prevFocus = document.activeElement;
+    var input = el.querySelector('[data-role="appid"]');
+    var okBtn = el.querySelector('[data-role="ok"]');
+    var hint = el.querySelector('[data-role="hint"]');
+
+    function readId() {
+      var raw = String(input.value || '').replace(/[^0-9]/g, '');
+      if (!raw) return 0;
+      var id = Number(raw);
+      return isFinite(id) && id > 0 ? id : 0;
+    }
+
+    function sync() {
+      var id = readId();
+      okBtn.disabled = id <= 0;
+      if (input.value !== '' && String(input.value).replace(/[^0-9]/g, '') !== String(input.value)) {
+        hint.textContent = '只能填数字，已忽略其它字符。';
+      } else if (id > 0) {
+        hint.textContent = '将打开 AppID ' + id + '。';
+      } else {
+        hint.textContent = '只能填数字。打开后如果读不到成就架构，说明这台电脑还没运行过该游戏 —— 先在 Steam 里启动一次再回来。';
+      }
+    }
+
+    function submit() {
+      var id = readId();
+      if (id <= 0) return;
+      closeModal();
+      if (state.mock) {
+        mockOpenGame(id);
+        return;
+      }
+      send('game/open', { id: id });
+      state.status.text = '正在打开 AppID ' + id + '…';
+      state.status.busy = true;
+      renderStatus();
+    }
+
+    el.addEventListener('input', function (e) {
+      if (e.target === input) sync();
+    });
+    el.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        submit();
+      }
+    });
+    el.addEventListener('click', function (e) {
+      var hit = e.target.closest ? e.target.closest('[data-role]') : null;
+      if (!hit) return;
+      var role = hit.getAttribute('data-role');
+      if (role === 'cancel') closeModal();
+      else if (role === 'ok') submit();
+    });
+
+    els.modalRoot.innerHTML = '';
+    els.modalRoot.appendChild(el);
+    setHidden(els.modalRoot, false);
+    modalState = { el: el, prevFocus: prevFocus };
+
+    sync();
+    window.setTimeout(function () {
+      try { input.focus({ preventScroll: true }); } catch (err) { /* 忽略 */ }
+    }, 30);
+  }
+
   function bindPicker() {
     if (els.pickerSearch) {
       var queuePickerRender = debounce(function () {
@@ -3855,6 +3961,7 @@
         renderStatus();
       });
     }
+    if (els.btnOpenId) els.btnOpenId.addEventListener('click', openAppIdModal);
     if (els.btnScheduleAll) els.btnScheduleAll.addEventListener('click', onScheduleBatch);
     if (els.btnReload) els.btnReload.addEventListener('click', onReload);
     if (els.gameGrid) {
@@ -4135,7 +4242,7 @@
   }
 
   window.SAM = {
-    version: '1.9.6',
+    version: '1.9.7',
     handleEvent: handleEvent,
     mock: enterMock,
     getState: function () {

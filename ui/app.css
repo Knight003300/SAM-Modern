@@ -677,6 +677,12 @@ dt {
   color: var(--text-2);
 }
 
+/* 「未在库中」：本机有痕迹但当前账号没拥有。用 --danger 是因为它多半意味着
+   打开后也读不到成就，属于需要用户注意的状态，而不是又一个分类标签。 */
+.gtag--unowned {
+  color: var(--danger);
+}
+
 .game-card__name {
   display: block;
   padding: var(--s2) var(--s3) 0;
@@ -1777,6 +1783,47 @@ dt {
   font-size: var(--t-micro);
   letter-spacing: .02em;
   color: var(--text-3);
+}
+
+/* 按 AppID 打开：一个输入框 + 说明文字，样式复用现有输入 token ---------- */
+
+.appid-field {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-top: var(--s3);
+}
+
+.appid-field__cap {
+  flex: none;
+  font-size: var(--t-micro);
+  font-weight: 600;
+  letter-spacing: .04em;
+  color: var(--text-3);
+}
+
+.appid-field__input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 var(--s2);
+  border: 0;
+  border-radius: var(--r);
+  background: var(--bg-0);
+  font-size: var(--t-body);
+  font-weight: 600;
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.appid-field__input:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.appid-field__input::placeholder {
+  color: var(--text-3);
+  font-weight: 400;
 }
 
 /* 定时解锁：时刻输入行 / 快捷时刻 / 任务列表 / 批量选游戏 ---------------- */

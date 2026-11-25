@@ -17,10 +17,52 @@ namespace SAM.Modern
             public long Id;
             public string Name;
             public string Type = "normal";
+
+            /// <summary>
+            /// Steam 是否认为当前账号「拥有」这个 app（IsSubscribedApp）。
+            /// 目录里扫出来的必然是 true；从安装清单或本机记录补出来的可能是 false ——
+            /// 家庭共享、免费周末结束、已退款、或账号切换后的残留。界面会据此打一个「未在库中」标记。
+            /// </summary>
+            public bool Subscribed = true;
         }
 
         private static readonly Regex NamePattern = new Regex("\"name\"\\s*\"([^\"]*)\"", RegexOptions.IgnoreCase);
         private static readonly Regex PathPattern = new Regex("\"path\"\\s*\"([^\"]*)\"", RegexOptions.IgnoreCase);
+
+        /// <summary>
+        /// Steam 自己的界面组件，不是游戏：它们会出现在 localconfig / 库缓存里，
+        /// 但 Steam 库从不把它们当游戏显示，列进来只会让列表变脏。
+        /// </summary>
+        private static readonly HashSet<long> NonGameApps = new HashSet<long> { 7, 760, 241100, 2371090 };
+
+        /// <summary>localconfig.vdf 里 apps 段的条目：<c>"123456" { ... }</c>。</summary>
+        private static readonly Regex LocalConfigAppPattern = new Regex(
+            "\"(\\d{1,10})\"\\s*\\{", RegexOptions.CultureInvariant);
+
+        /// <summary>
+        /// 名字像工具/服务器/权利的条目。它们在 Steam 库里属于「软件/工具」，不是游戏，
+        /// 但没有成就也没有封面，混在正式版里很吵 —— 归到「其他」分类而不是丢掉，用户仍然能点开。
+        /// 只做后缀匹配，避免误伤名字里恰好带这些词的正式游戏。
+        /// </summary>
+        private static readonly string[] ToolSuffixes =
+        {
+            " Dedicated Server",
+            " Authoring Tools",
+            " SDK",
+            " - Entitlement",
+            "Linux client",
+            " Steamworks Common Redistributables",
+        };
+
+        private static bool LooksLikeTool(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            foreach (string suffix in ToolSuffixes)
+            {
+                if (name.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            return false;
+        }
 
         private readonly SteamHost _host;
         private readonly Timer _pumpTimer;
@@ -144,6 +186,8 @@ namespace SAM.Modern
                     .Name("id").Num(game.Id)
                     .Name("name").Str(game.Name)
                     .Name("type").Str(game.Type);
+                // 只有「本机有痕迹但 Steam 说没拥有」的才带这个字段，正常游戏省掉一半报文体积。
+                if (game.Subscribed == false) b.Name("unowned").Bool(true);
                 WriteCapsules(b, game.Id);
                 b.EndObject();
             }
@@ -201,6 +245,7 @@ namespace SAM.Modern
                         Id = id,
                         Name = parts[2],
                         Type = string.IsNullOrEmpty(parts[1]) ? "normal" : parts[1],
+                        Subscribed = parts.Length < 4 || parts[3] != "0",
                     });
                 }
                 Log.Write("owned cache loaded: " + result.Count);
@@ -225,7 +270,8 @@ namespace SAM.Modern
                 foreach (var game in games)
                 {
                     string name = (game.Name ?? string.Empty).Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ');
-                    lines.Add(game.Id.ToString(CultureInfo.InvariantCulture) + "\t" + game.Type + "\t" + name);
+                    lines.Add(game.Id.ToString(CultureInfo.InvariantCulture) + "\t" + game.Type + "\t" + name +
+                        (game.Subscribed ? string.Empty : "\t0"));
                 }
 
                 string temp = path + ".tmp";
@@ -255,79 +301,28 @@ namespace SAM.Modern
             catch (Exception) { }
         }
 
-        /// <summary>按 Steam 官方目录（games.xml）核对订阅状态，列出账号拥有的全部游戏。</summary>
-        private List<GameEntry> EnumerateGames()
+        /// <summary>
+        /// 本地证据：Steam 自己在磁盘上留下的「这台机器装过 / 跑过这个 app」的痕迹。
+        /// 只靠 games.xml + IsSubscribedApp 会漏两类游戏：
+        /// ① 目录里没有收录、但账号确实拥有的（如 Don't Starve Together、Soundpad）；
+        /// ② 目录里有、但当前账号 IsSubscribedApp 为 false 的（家庭共享、免费周末结束、已退款）。
+        /// 这两类都能在本地痕迹里找到，所以扫描时把它们当作补充来源。
+        /// </summary>
+        private sealed class LocalEvidence
         {
-            string source;
-            List<GameCatalog.CatalogEntry> catalog = GameCatalog.Load(out source);
-            this.ReportStatus("已读取游戏目录（" + (catalog == null ? 0 : catalog.Count) + " 项，" +
-                (string.Equals(source, "network", StringComparison.Ordinal) ? "在线" : "本地缓存") + "），正在核对拥有的游戏…");
+            /// <summary>本机任何地方出现过的 appId（库缓存、userdata、localconfig）。</summary>
+            public readonly HashSet<long> Ids = new HashSet<long>();
 
-            var result = new List<GameEntry>();
-            var seen = new HashSet<long>();
-
-            if (catalog != null)
-            {
-                int scanned = 0;
-                foreach (var entry in catalog)
-                {
-                    scanned++;
-                    if (scanned % 1000 == 0) this.SendScanProgress(result.Count);
-                    if (entry.Id <= 0) continue;
-                    if (seen.Contains(entry.Id)) continue;
-                    if (this._host.IsSubscribed((uint)entry.Id) == false) continue;
-
-                    string name = this._host.GetAppData((uint)entry.Id, "name");
-                    if (string.IsNullOrEmpty(name)) continue;
-
-                    seen.Add(entry.Id);
-                    result.Add(new GameEntry
-                    {
-                        Id = entry.Id,
-                        Name = name,
-                        Type = GameCatalog.TypeLabelKey(entry.Type),
-                    });
-                }
-                Log.Write("catalog scan: " + result.Count + " owned of " + catalog.Count);
-            }
-
-            // 本地已安装但目录里缺失的（极少见，比如未收录的新游戏），用清单补齐。
-            var supplemental = new List<long>();
-            foreach (var entry in this.EnumerateInstalled())
-            {
-                if (seen.Contains(entry.Id)) continue;
-                if (this._host.IsSubscribed((uint)entry.Id) == false) continue;
-                seen.Add(entry.Id);
-                result.Add(entry);
-                supplemental.Add(entry.Id);
-            }
-            if (supplemental.Count > 0)
-            {
-                Log.Write("catalog missing, added from installs: " + string.Join(",", supplemental.ConvertAll(v => v.ToString(CultureInfo.InvariantCulture)).ToArray()));
-            }
-
-            if (seen.Contains(480) == false && this._host.IsSubscribed(480))
-            {
-                result.Add(new GameEntry { Id = 480, Name = "Spacewar（测试用）", Type = "junk" });
-            }
-
-            result.Sort(delegate (GameEntry a, GameEntry b)
-            {
-                return string.Compare(a.Name, b.Name, StringComparison.CurrentCultureIgnoreCase);
-            });
-
-            return result;
+            /// <summary>强证据：本机装过或跑过（安装清单、成就架构文件）。</summary>
+            public readonly HashSet<long> Strong = new HashSet<long>();
         }
 
-        /// <summary>扫描本地 steamapps 清单，拿到已安装的游戏（作为目录的补充）。</summary>
-        private List<GameEntry> EnumerateInstalled()
+        /// <summary>Steam 库里所有可能的 steamapps 目录（主库 + libraryfolders.vdf 里登记的）。</summary>
+        private static List<string> LibraryRoots(string install)
         {
-            var result = new List<GameEntry>();
-
-            string install = SAM.API.Steam.GetInstallPath();
-            if (string.IsNullOrEmpty(install)) return result;
-
             var roots = new List<string>();
+            if (string.IsNullOrEmpty(install)) return roots;
+
             string steamApps = Path.Combine(install, "steamapps");
             roots.Add(steamApps);
 
@@ -347,6 +342,281 @@ namespace SAM.Modern
                 }
             }
             catch (Exception error) { Log.Write("libraryfolders parse failed", error); }
+
+            return roots;
+        }
+
+        /// <summary>收集本地痕迹。全部是纯文件读取，不依赖 Steam 接口，所以很快也不会失败。</summary>
+        private static LocalEvidence EnumerateEvidence(string install, List<string> roots)
+        {
+            var evidence = new LocalEvidence();
+            if (string.IsNullOrEmpty(install)) return evidence;
+
+            // 强证据 1：成就架构文件。Steam 只在游戏真正启动过之后才会写这个文件。
+            try
+            {
+                string stats = Path.Combine(install, "appcache", "stats");
+                if (Directory.Exists(stats))
+                {
+                    foreach (string file in Directory.GetFiles(stats, "UserGameStatsSchema_*.bin"))
+                    {
+                        long id;
+                        if (long.TryParse(Path.GetFileNameWithoutExtension(file).Substring("UserGameStatsSchema_".Length),
+                            NumberStyles.Integer, CultureInfo.InvariantCulture, out id) && id > 0)
+                        {
+                            evidence.Strong.Add(id);
+                            evidence.Ids.Add(id);
+                        }
+                    }
+                }
+            }
+            catch (Exception error) { Log.Write("evidence stats scan failed", error); }
+
+            // 强证据 2：安装清单（已安装）。
+            foreach (string root in roots)
+            {
+                try
+                {
+                    if (Directory.Exists(root) == false) continue;
+                    foreach (string manifest in Directory.GetFiles(root, "appmanifest_*.acf"))
+                    {
+                        long id;
+                        if (long.TryParse(Path.GetFileNameWithoutExtension(manifest).Substring("appmanifest_".Length),
+                            NumberStyles.Integer, CultureInfo.InvariantCulture, out id) && id > 0)
+                        {
+                            evidence.Strong.Add(id);
+                            evidence.Ids.Add(id);
+                        }
+                    }
+                }
+                catch (Exception error) { Log.Write("evidence manifest scan failed: " + root, error); }
+            }
+
+            // 弱证据：全机库缓存（Steam 为见过的 app 存过封面/信息就会留下一个以 appId 命名的文件）。
+            try
+            {
+                string libraryCache = Path.Combine(install, "appcache", "librarycache");
+                if (Directory.Exists(libraryCache))
+                {
+                    foreach (string file in Directory.GetFiles(libraryCache))
+                    {
+                        long id;
+                        if (long.TryParse(Path.GetFileName(file), NumberStyles.Integer, CultureInfo.InvariantCulture, out id) && id > 0)
+                        {
+                            evidence.Ids.Add(id);
+                        }
+                    }
+                }
+            }
+            catch (Exception error) { Log.Write("evidence librarycache scan failed", error); }
+
+            // 弱证据：每个账号的 userdata（localconfig 的 apps 段 + 每游戏成就缓存）。
+            try
+            {
+                string userdata = Path.Combine(install, "userdata");
+                if (Directory.Exists(userdata))
+                {
+                    foreach (string account in Directory.GetDirectories(userdata))
+                    {
+                        string config = Path.Combine(account, "config");
+
+                        string localConfig = Path.Combine(config, "localconfig.vdf");
+                        if (File.Exists(localConfig))
+                        {
+                            try
+                            {
+                                foreach (long id in ReadLocalConfigApps(File.ReadAllText(localConfig)))
+                                {
+                                    if (id > 0) evidence.Ids.Add(id);
+                                }
+                            }
+                            catch (Exception error) { Log.Write("evidence localconfig parse failed: " + localConfig, error); }
+                        }
+
+                        string cache = Path.Combine(config, "librarycache");
+                        if (Directory.Exists(cache))
+                        {
+                            foreach (string file in Directory.GetFiles(cache, "*.json"))
+                            {
+                                long id;
+                                if (long.TryParse(Path.GetFileNameWithoutExtension(file), NumberStyles.Integer,
+                                    CultureInfo.InvariantCulture, out id) && id > 0)
+                                {
+                                    evidence.Ids.Add(id);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception error) { Log.Write("evidence userdata scan failed", error); }
+
+            Log.Write("local evidence: ids=" + evidence.Ids.Count + " strong=" + evidence.Strong.Count);
+            return evidence;
+        }
+
+        /// <summary>从 localconfig.vdf 的 apps 段取 appId 集合。</summary>
+        private static List<long> ReadLocalConfigApps(string text)
+        {
+            var result = new List<long>();
+            if (string.IsNullOrEmpty(text)) return result;
+
+            int idx = text.IndexOf("\"apps\"", StringComparison.Ordinal);
+            if (idx < 0) return result;
+
+            int depth = 0;
+            int start = -1;
+            int end = -1;
+            for (int i = idx; i < text.Length; i++)
+            {
+                char c = text[i];
+                if (c == '{')
+                {
+                    depth++;
+                    if (depth == 1 && start < 0) start = i;
+                }
+                else if (c == '}')
+                {
+                    depth--;
+                    if (depth == 0 && start >= 0) { end = i; break; }
+                }
+            }
+            if (start < 0 || end <= start) return result;
+
+            foreach (Match m in LocalConfigAppPattern.Matches(text.Substring(start, end - start + 1)))
+            {
+                long id;
+                if (long.TryParse(m.Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out id) && id > 0)
+                {
+                    if (result.Contains(id) == false) result.Add(id);
+                }
+            }
+            return result;
+        }
+
+        /// <summary>按 Steam 官方目录（games.xml）核对订阅状态，再补上本地痕迹里发现的其他游戏。</summary>
+        private List<GameEntry> EnumerateGames()
+        {
+            string source;
+            List<GameCatalog.CatalogEntry> catalog = GameCatalog.Load(out source);
+            this.ReportStatus("已读取游戏目录（" + (catalog == null ? 0 : catalog.Count) + " 项，" +
+                (string.Equals(source, "network", StringComparison.Ordinal) ? "在线" : "本地缓存") + "），正在核对拥有的游戏…");
+
+            var result = new List<GameEntry>();
+            var seen = new HashSet<long>();
+
+            // 目录里出现过的 appId → 类型（demo / mod / junk），补扫时沿用同一个分类。
+            var catalogTypes = new Dictionary<long, string>();
+
+            if (catalog != null)
+            {
+                int scanned = 0;
+                foreach (var entry in catalog)
+                {
+                    scanned++;
+                    if (scanned % 1000 == 0) this.SendScanProgress(result.Count);
+                    if (entry.Id <= 0) continue;
+                    // 分类先全量记下来：补扫出来的 appId 也要沿用目录里的 demo / mod 标记。
+                    if (catalogTypes.ContainsKey(entry.Id) == false)
+                    {
+                        catalogTypes[entry.Id] = GameCatalog.TypeLabelKey(entry.Type);
+                    }
+                    if (seen.Contains(entry.Id)) continue;
+                    if (this._host.IsSubscribed((uint)entry.Id) == false) continue;
+
+                    string name = this._host.GetAppData((uint)entry.Id, "name");
+                    if (string.IsNullOrEmpty(name)) continue;
+
+                    seen.Add(entry.Id);
+                    result.Add(new GameEntry
+                    {
+                        Id = entry.Id,
+                        Name = name,
+                        Type = catalogTypes[entry.Id],
+                    });
+                }
+                Log.Write("catalog scan: " + result.Count + " owned of " + catalog.Count);
+            }
+
+            string install = SAM.API.Steam.GetInstallPath();
+            List<string> roots = LibraryRoots(install);
+
+            // 本地已安装但目录里缺失的（极少见，比如未收录的新游戏），用清单补齐。
+            var supplemental = new List<long>();
+            foreach (var entry in this.EnumerateInstalled(roots))
+            {
+                if (seen.Contains(entry.Id)) continue;
+                if (this._host.IsSubscribed((uint)entry.Id) == false) continue;
+                seen.Add(entry.Id);
+                result.Add(entry);
+                supplemental.Add(entry.Id);
+            }
+            if (supplemental.Count > 0)
+            {
+                Log.Write("catalog missing, added from installs: " + string.Join(",", supplemental.ConvertAll(v => v.ToString(CultureInfo.InvariantCulture)).ToArray()));
+            }
+
+            // 第三轮补扫：本地痕迹里还有、但前面两轮都没进来的。
+            // 判据是「Steam 说拥有」或「本机确实装过/跑过」，两者有一个就收；
+            // 只有弱痕迹（库缓存里见过封面）的不收，否则列表会被别人的游戏塞满。
+            var evidence = EnumerateEvidence(install, roots);
+            var evidenceAdded = new List<long>();
+            var evidenceUnsubscribed = new List<long>();
+            foreach (long id in evidence.Ids)
+            {
+                if (id <= 0 || seen.Contains(id)) continue;
+                if (NonGameApps.Contains(id)) continue;
+
+                bool strong = evidence.Strong.Contains(id);
+                bool subscribed = this._host.IsSubscribed((uint)id);
+                if (subscribed == false && strong == false) continue;
+
+                string name = this._host.GetAppData((uint)id, "name");
+                if (string.IsNullOrEmpty(name)) name = "App " + id.ToString(CultureInfo.InvariantCulture);
+
+                string type;
+                if (catalogTypes.TryGetValue(id, out type) == false)
+                {
+                    type = LooksLikeTool(name) ? "junk" : "normal";
+                }
+
+                seen.Add(id);
+                result.Add(new GameEntry
+                {
+                    Id = id,
+                    Name = name,
+                    Type = type,
+                    Subscribed = subscribed,
+                });
+                evidenceAdded.Add(id);
+                if (subscribed == false) evidenceUnsubscribed.Add(id);
+            }
+            if (evidenceAdded.Count > 0)
+            {
+                Log.Write("evidence added: " + string.Join(",", evidenceAdded.ConvertAll(v => v.ToString(CultureInfo.InvariantCulture)).ToArray()));
+            }
+            if (evidenceUnsubscribed.Count > 0)
+            {
+                Log.Write("evidence added but not subscribed: " + string.Join(",", evidenceUnsubscribed.ConvertAll(v => v.ToString(CultureInfo.InvariantCulture)).ToArray()));
+            }
+
+            if (seen.Contains(480) == false && this._host.IsSubscribed(480))
+            {
+                result.Add(new GameEntry { Id = 480, Name = "Spacewar（测试用）", Type = "junk" });
+            }
+
+            result.Sort(delegate (GameEntry a, GameEntry b)
+            {
+                return string.Compare(a.Name, b.Name, StringComparison.CurrentCultureIgnoreCase);
+            });
+
+            return result;
+        }
+
+        /// <summary>扫描本地 steamapps 清单，拿到已安装的游戏（作为目录的补充）。</summary>
+        private List<GameEntry> EnumerateInstalled(List<string> roots)
+        {
+            var result = new List<GameEntry>();
 
             foreach (string root in roots)
             {

@@ -1,4 +1,4 @@
-﻿/* Copyright (c) 2024 Rick (rick 'at' gibbed 'dot' us)
+/* Copyright (c) 2024 Rick (rick 'at' gibbed 'dot' us)
  *
  * This software is provided 'as-is', without any express or implied
  * warranty. In no event will the authors be held liable for any damages
@@ -49,6 +49,53 @@ namespace SAM.API.Wrappers
                 this.Functions.GetCurrentGameLanguage,
                 this.ObjectAddress);
             return NativeStrings.PointerToString(languagePointer);
+        }
+        #endregion
+
+        #region IsAppInstalled
+        [UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+        [return: MarshalAs(UnmanagedType.I1)]
+        private delegate bool NativeIsAppInstalled(IntPtr self, uint gameId);
+
+        public bool IsAppInstalled(uint gameId)
+        {
+            return this.Call<bool, NativeIsAppInstalled>(
+                this.Functions.IsAppInstalled,
+                this.ObjectAddress,
+                gameId);
+        }
+        #endregion
+
+        #region GetAppOwner
+        // 说明：Steam 实际返回的 ISteamApps 版本里这个槽位在部分客户端上不可调用（实测 AccessViolation），
+        // 因此不封装。判断「这个 app 是谁的」改用 IsSubscribedFromFamilySharing + IsAppInstalled 组合。
+        #endregion
+
+        #region IsSubscribedFromFreeWeekend
+        [UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+        [return: MarshalAs(UnmanagedType.I1)]
+        private delegate bool NativeIsSubscribedFromFreeWeekend(IntPtr self, uint gameId);
+
+        public bool IsSubscribedFromFreeWeekend(uint gameId)
+        {
+            return this.Call<bool, NativeIsSubscribedFromFreeWeekend>(
+                this.Functions.IsSubscribedFromFreeWeekend,
+                this.ObjectAddress,
+                gameId);
+        }
+        #endregion
+
+        #region IsSubscribedFromFamilySharing
+        [UnmanagedFunctionPointer(CallingConvention.ThisCall)]
+        [return: MarshalAs(UnmanagedType.I1)]
+        private delegate bool NativeIsSubscribedFromFamilySharing(IntPtr self, uint gameId);
+
+        public bool IsSubscribedFromFamilySharing(uint gameId)
+        {
+            return this.Call<bool, NativeIsSubscribedFromFamilySharing>(
+                this.Functions.IsSubscribedFromFamilySharing,
+                this.ObjectAddress,
+                gameId);
         }
         #endregion
     }
