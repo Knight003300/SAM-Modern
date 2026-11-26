@@ -118,6 +118,11 @@ dt {
 
 .app {
   display: grid;
+  /* 列宽必须显式约束成 1fr：只写 grid-template-rows 时，隐式列宽取「最宽子项的
+     min-content」，窗口一窄到装不下工具栏（搜索框 + 类型筛选 + 三个按钮），整块
+     布局就被撑到比视口还宽，body 的 overflow:hidden 再把右侧（关闭按钮、状态栏
+     文字、最后一列卡片）直接裁掉。 */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: var(--titlebar-h) var(--toolbar-h) minmax(0, 1fr) var(--status-h);
   height: 100%;
 }
@@ -128,6 +133,7 @@ dt {
   display: flex;
   align-items: center;
   gap: var(--s3);
+  min-width: 0;
   padding: 0 var(--s2) 0 var(--s4);
   background: var(--bg-0);
   border-bottom: 1px solid var(--line);
@@ -138,7 +144,9 @@ dt {
   display: flex;
   align-items: center;
   gap: var(--s2);
+  flex: 0 1 auto;
   min-width: 0;
+  overflow: hidden;
 }
 
 .brand__mark {
@@ -163,10 +171,12 @@ dt {
 }
 
 .brand__title {
+  overflow: hidden;
   font-size: var(--t-body);
   font-weight: 600;
   color: var(--text-1);
   white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .brand__sub {
@@ -181,8 +191,10 @@ dt {
   display: flex;
   align-items: center;
   gap: var(--s2);
+  flex: 0 1 auto;
   margin-left: auto;
   min-width: 0;
+  overflow: hidden;
   -webkit-app-region: no-drag;
 }
 
@@ -215,6 +227,7 @@ dt {
 .winbtns {
   display: flex;
   align-items: center;
+  flex: none;
   gap: var(--s1);
   -webkit-app-region: no-drag;
 }
@@ -253,6 +266,7 @@ dt {
 .toolbar {
   display: flex;
   align-items: center;
+  min-width: 0;
   background: var(--bg-0);
   border-bottom: 1px solid var(--line);
 }
@@ -262,6 +276,7 @@ dt {
   align-items: center;
   gap: var(--s2);
   width: 100%;
+  min-width: 0;
   height: 100%;
   padding: 0 var(--s4);
 }
@@ -1411,6 +1426,7 @@ dt {
   align-items: center;
   justify-content: space-between;
   gap: var(--s3);
+  min-width: 0;
   padding: 0 var(--s4);
   background: var(--bg-0);
   border-top: 1px solid var(--line);
@@ -2293,6 +2309,44 @@ dt {
 
   .search--inline {
     width: 180px;
+  }
+}
+
+/* 工具栏的 min-content 决定了整个页面能不能塞进窗口：它一旦超出视口，.app 的
+   列就会被撑宽，右侧（关闭按钮、状态栏文字、最后一列卡片）被 body 的
+   overflow:hidden 直接裁掉 —— 用户看到的就是「界面比例不对、右边缺一块」。
+   带文字的完整工具栏大约要 1100px：搜索 280 + 类型筛选 296 + 三个按钮 362
+   + 间距和内边距。所以窗口逻辑宽度不到 1180 时先把搜索框和筛选按钮收窄，
+   不到 1000 再退化成纯图标（按钮都有 title 提示）。 */
+@media (max-width: 1180px) {
+  .search {
+    width: min(180px, 24vw);
+  }
+
+  .toolbar__row .seg__item {
+    padding: 0 var(--s2);
+  }
+}
+
+/* 本机最小窗口 920x620 @125% DPI → 视口只有 724 逻辑像素，光靠收窄还不够。
+   只对游戏库工具栏生效：游戏页那几个按钮本来放得下，而且「保存改动」的文字
+   一隐藏就只剩一个数字徽标，反而看不懂。 */
+@media (max-width: 1000px) {
+  #tbPicker .btn__label {
+    display: none;
+  }
+
+  #tbPicker .btn {
+    padding: 0 var(--s2);
+  }
+
+  .search {
+    width: min(160px, 28vw);
+  }
+
+  /* 窄窗口里长昵称会把标题栏挤满，先让位给齿轮、定时入口和演示标记。 */
+  #userChip {
+    display: none;
   }
 }
 
