@@ -3801,7 +3801,9 @@
     if (els.btnMax) els.btnMax.addEventListener('click', function () { send('win/maximize'); });
     if (els.btnClose) els.btnClose.addEventListener('click', function () { send('win/close'); });
     if (els.scheduleChip) els.scheduleChip.addEventListener('click', openScheduleListModal);
-    if (els.btnSettings) els.btnSettings.addEventListener('click', openSettingsModal);
+    // 直接传 openSettingsModal 会把 MouseEvent 当成「回来时该聚焦哪一行」的参数，
+    // 包一层，保证从标题栏进来总是落在第一行。
+    if (els.btnSettings) els.btnSettings.addEventListener('click', function () { openSettingsModal(); });
 
     var bar = document.getElementById('titlebar');
     if (bar) {
@@ -3979,11 +3981,84 @@
     state.app.releasesUrl = String(ev.releasesUrl || '');
   }
 
-  // 检查更新是异步的：结果回到「关于」弹窗里就地显示。
-  function onUpdateResult(ev) {
-    if (modalState && modalState.kind === 'about' && typeof modalState.onUpdate === 'function') {
-      modalState.onUpdate(ev);
+  // 检查更新的结果由主机异步推回，可能比弹窗活得久：状态放在模块级，
+  // 「设置」和「关于」都从这里取，换页、重开都还能看到上一次的结果。
+  var lastUpdate = null;
+  var updatePending = false;
+  var autoChecked = false;
+
+  // 把 lastUpdate 归一成一份可渲染的状态，两个弹窗共用，
+  // 免得「检查中 / 失败 / 已最新 / 有新版」四个分支各写一遍。
+  function updateView() {
+    if (updatePending) {
+      return { busy: true, cls: '', text: '正在检查更新…', row: '正在检查更新…' };
     }
+    var ev = lastUpdate;
+    if (!ev) {
+      return { busy: false, cls: '', text: '当前版本 v' + appVersion() + '。', row: '当前版本 v' + appVersion() };
+    }
+    if (ev.demo) {
+      return { busy: false, cls: 'about-result--warn', text: ev.failure, row: '演示模式下无法检查更新' };
+    }
+    if (ev.ok !== true) {
+      return {
+        busy: false, cls: 'about-result--warn',
+        text: ev.failure || '检查更新失败，请稍后再试。',
+        row: '检查失败 · 点一下重试'
+      };
+    }
+    if (!ev.newer) {
+      var cur = ev.current || appVersion();
+      return { busy: false, cls: 'about-result--ok', text: '已经是最新版本（v' + cur + '）。', row: '已是最新版本 v' + cur };
+    }
+    var tag = String(ev.tag || ev.name || '');
+    return {
+      busy: false, newer: true, cls: 'about-result--new',
+      tag: tag, name: String(ev.name || ''),
+      url: String(ev.url || '') || appReleasesUrl(),
+      text: '发现新版本 ' + tag,
+      row: '发现新版本 ' + tag + ' · 点一下打开发布页'
+    };
+  }
+
+  // 检查中不再重复发请求：主机那边只回一次，重复点只会让按钮闪。
+  // 万一主机那边一直没回（断网、GitHub 卡住），15 秒后自己收尾，
+  // 否则这一行会永远停在「正在检查更新…」并且一直点不动。
+  var updateTimer = null;
+
+  function clearUpdateTimer() {
+    if (updateTimer) { window.clearTimeout(updateTimer); updateTimer = null; }
+  }
+
+  function requestUpdate() {
+    if (updatePending) return;
+    if (!hasBridge()) {
+      lastUpdate = { ok: false, demo: true, failure: '演示模式下连不上更新服务器，装到本机后可以检查。' };
+      refreshUpdateUi();
+      return;
+    }
+    updatePending = true;
+    refreshUpdateUi();
+    clearUpdateTimer();
+    updateTimer = window.setTimeout(function () {
+      updateTimer = null;
+      if (!updatePending) return;
+      updatePending = false;
+      lastUpdate = { ok: false, failure: '检查更新超时了，请检查网络后重试。' };
+      refreshUpdateUi();
+    }, 15000);
+    send('app/checkUpdate');
+  }
+
+  function refreshUpdateUi() {
+    if (modalState && typeof modalState.onUpdate === 'function') modalState.onUpdate();
+  }
+
+  function onUpdateResult(ev) {
+    clearUpdateTimer();
+    updatePending = false;
+    lastUpdate = ev || null;
+    refreshUpdateUi();
   }
 
   function openUrl(url) {
@@ -3993,18 +4068,59 @@
       return;
     }
     send('app/openUrl', { url: url });
+    // 浏览器在后台起来时窗口不会自己让位，给一句提示，免得以为点了没反应。
+    toast('info', '已在浏览器打开', url.replace(/^https?:\/\//, ''));
+  }
+
+  // 「设置 → 关于 → 赞赏」是一个小层级：换页时沿用最初那次的焦点来源，
+  // 一路退回来焦点仍落在标题栏的齿轮上，而不是停在已经销毁的节点上。
+  function swapModal(el, kind, extra) {
+    var prevFocus = modalState ? modalState.prevFocus : document.activeElement;
+    // 用鼠标点齿轮时 WebView2 不一定会把焦点放到按钮上，activeElement 可能还是 body。
+    // 这种情况下退回到齿轮本身，关闭弹窗后焦点才有个像样的落点。
+    if (!modalState && (!prevFocus || prevFocus === document.body || prevFocus === document.documentElement)) {
+      prevFocus = (extra && extra.fallbackFocus) || prevFocus;
+    }
+    if (modalState) {
+      if (modalState.tick) { window.clearInterval(modalState.tick); modalState.tick = null; }
+      if (modalState.clock) { window.clearInterval(modalState.clock); modalState.clock = null; }
+    }
+    els.modalRoot.innerHTML = '';
+    els.modalRoot.appendChild(el);
+    setHidden(els.modalRoot, false);
+    var next = { el: el, prevFocus: prevFocus, kind: kind };
+    if (extra) {
+      for (var key in extra) {
+        if (key === 'fallbackFocus') continue;
+        if (Object.prototype.hasOwnProperty.call(extra, key)) next[key] = extra[key];
+      }
+    }
+    modalState = next;
+    return next;
+  }
+
+  // 30ms 后再聚焦：节点刚插进 DOM，立刻聚焦在部分 WebView2 版本上会被吞掉。
+  function focusIn(el, selector) {
+    window.setTimeout(function () {
+      try {
+        var node = selector ? el.querySelector(selector) : el;
+        if (!node && selector !== '.set-row') node = el.querySelector('.set-row');
+        if (node) node.focus({ preventScroll: true });
+      } catch (err) { /* 选择器不合法时退回第一个入口 */ }
+    }, 30);
   }
 
   function settingsRowHtml(role, label, desc) {
     return '<button type="button" class="set-row" data-role="' + role + '">' +
       '<span class="set-row__main">' +
       '<span class="set-row__label">' + esc(label) + '</span>' +
-      '<span class="set-row__desc">' + esc(desc) + '</span>' +
+      '<span class="set-row__desc" data-desc="' + role + '">' + esc(desc) + '</span>' +
       '</span><span class="set-row__chev">' + SVG_CHEV + '</span></button>';
   }
 
-  function openSettingsModal() {
-    closeModal();
+  // 设置是这个层级的根：更新、外链、关于都从这里进。换页统一走 swapModal，
+  // 焦点来源一路沿用，最后关闭时回到标题栏的齿轮，而不是停在已经销毁的节点上。
+  function openSettingsModal(focusRole) {
     var el = document.createElement('div');
     el.className = 'modal';
     el.setAttribute('role', 'dialog');
@@ -4017,7 +4133,8 @@
     parts.push('<h2 class="modal__title">设置</h2>');
     parts.push('</div>');
     parts.push('<div class="set-list">');
-    parts.push(settingsRowHtml('about', '关于', '版本 ' + appVersion() + ' · 检查更新 · 赞赏作者'));
+    parts.push(settingsRowHtml('about', '关于', '版本 ' + appVersion() + ' · 赞赏作者'));
+    parts.push(settingsRowHtml('update', '检查更新', ''));
     parts.push(settingsRowHtml('home', '项目主页', 'github.com/Knight003300/SAM-Modern'));
     parts.push(settingsRowHtml('latest', '下载最新版', '在浏览器打开发布页'));
     parts.push('</div>');
@@ -4027,29 +4144,49 @@
     parts.push('</div>');
     el.innerHTML = parts.join('');
 
+    var updateRow = el.querySelector('[data-role="update"]');
+    var updateDesc = el.querySelector('[data-desc="update"]');
+
+    // 更新状态在设置里就能看到，不用先进「关于」：检查中、已最新、有新版、失败都只占这一行。
+    function renderUpdate() {
+      var v = updateView();
+      updateDesc.textContent = v.row;
+      updateRow.classList.toggle('is-new', !!v.newer);
+      // 不用 disabled：按钮一旦禁用，焦点会掉到 body 上，检查完还得用鼠标重新点。
+      // 这里只标记状态，点击时靠 updateView().busy 拦住重复请求。
+      updateRow.classList.toggle('is-busy', !!v.busy);
+      updateRow.setAttribute('aria-disabled', v.busy ? 'true' : 'false');
+    }
+
     el.addEventListener('click', function (e) {
       var hit = e.target.closest ? e.target.closest('[data-role]') : null;
       if (!hit) return;
       var role = hit.getAttribute('data-role');
-      if (role === 'cancel') closeModal();
-      else if (role === 'about') openAboutModal();
-      else if (role === 'home') openUrl(HOME_URL);
-      else if (role === 'latest') openUrl(appReleasesUrl());
+      if (role === 'cancel') { closeModal(); return; }
+      if (role === 'about') { openAboutModal(); return; }
+      if (role === 'home') { openUrl(HOME_URL); return; }
+      if (role === 'latest') { openUrl(appReleasesUrl()); return; }
+      if (role !== 'update') return;
+      var v = updateView();
+      if (v.busy) return;
+      // 已经有新版本时，这一行直接变成「打开发布页」；否则重新查一次。
+      if (v.newer) openUrl(v.url);
+      else requestUpdate();
     });
 
-    var prevFocus = document.activeElement;
-    els.modalRoot.innerHTML = '';
-    els.modalRoot.appendChild(el);
-    setHidden(els.modalRoot, false);
-    modalState = { el: el, prevFocus: prevFocus, kind: 'settings' };
-
-    window.setTimeout(function () {
-      try { el.querySelector('.set-row').focus({ preventScroll: true }); } catch (err) { /* 忽略 */ }
-    }, 30);
+    swapModal(el, 'settings', { onUpdate: renderUpdate, fallbackFocus: els.btnSettings });
+    renderUpdate();
+    // 第一次打开设置时顺手查一次：用户不用先点「检查更新」才知道自己是不是最新版。
+    // 一次会话只自动查一次；结果只写在这一行的描述里，不弹窗打扰。
+    if (!autoChecked && !lastUpdate && !updatePending && hasBridge()) {
+      autoChecked = true;
+      requestUpdate();
+    }
+    // 从「关于」退回来时，焦点落在刚才点的那一行，而不是每次都被拽回第一行。
+    focusIn(el, focusRole ? '[data-role="' + focusRole + '"]' : '.set-row');
   }
 
   function openAboutModal() {
-    closeModal();
     var el = document.createElement('div');
     el.className = 'modal';
     el.setAttribute('role', 'dialog');
@@ -4071,40 +4208,31 @@
     parts.push('<button type="button" class="btn btn--primary" data-role="check">检查更新</button>');
     parts.push('<button type="button" class="btn btn--ghost" data-role="reward">赞赏作者</button>');
     parts.push('</div>');
-    parts.push('<div class="about-result" data-role="updateBox">当前版本 v' + esc(appVersion()) + '。</div>');
+    parts.push('<div class="about-result" data-role="updateBox"></div>');
     parts.push('</div>');
     parts.push('<div class="modal__foot">');
+    parts.push('<button type="button" class="btn btn--ghost" data-role="back">返回设置</button>');
     parts.push('<button type="button" class="btn btn--ghost" data-role="cancel">关闭</button>');
     parts.push('</div>');
     el.innerHTML = parts.join('');
 
     var checkBtn = el.querySelector('[data-role="check"]');
     var box = el.querySelector('[data-role="updateBox"]');
-    var checking = false;
-    // 有新版时优先用服务器给的发布页地址（可能不是 latest 那个 URL）。
-    var releaseUrl = appReleasesUrl();
 
-    function showUpdate(ev) {
-      checking = false;
-      checkBtn.disabled = false;
-      checkBtn.textContent = '检查更新';
-      if (!ev || ev.ok !== true) {
-        box.className = 'about-result about-result--warn';
-        box.textContent = (ev && ev.failure) || '检查更新失败，请稍后再试。';
-        return;
+    function renderUpdate() {
+      var v = updateView();
+      // 检查中只改文案与状态标记，不禁用按钮：禁用会让焦点从按钮上掉下来。
+      checkBtn.classList.toggle('is-busy', !!v.busy);
+      checkBtn.setAttribute('aria-disabled', v.busy ? 'true' : 'false');
+      checkBtn.textContent = v.busy ? '检查中…' : '检查更新';
+      box.className = 'about-result' + (v.cls ? ' ' + v.cls : '');
+      if (v.newer) {
+        box.innerHTML = '<span class="about-result__title">发现新版本 ' + esc(v.tag) + '</span>' +
+          (v.name && v.name !== v.tag ? '<span class="about-result__sub">' + esc(v.name) + '</span>' : '') +
+          '<button type="button" class="btn btn--primary btn--sm" data-role="openRelease">打开发布页</button>';
+      } else {
+        box.textContent = v.text;
       }
-      if (!ev.newer) {
-        box.className = 'about-result about-result--ok';
-        box.textContent = '已经是最新版本（v' + (ev.current || appVersion()) + '）。';
-        return;
-      }
-      releaseUrl = String(ev.url || '') || appReleasesUrl();
-      var tag = String(ev.tag || '');
-      var name = String(ev.name || '');
-      box.className = 'about-result about-result--new';
-      box.innerHTML = '<span class="about-result__title">发现新版本 ' + esc(tag || name) + '</span>' +
-        (name && name !== tag ? '<span class="about-result__sub">' + esc(name) + '</span>' : '') +
-        '<button type="button" class="btn btn--primary btn--sm" data-role="openRelease">打开发布页</button>';
     }
 
     el.addEventListener('click', function (e) {
@@ -4112,35 +4240,21 @@
       if (!hit) return;
       var role = hit.getAttribute('data-role');
       if (role === 'cancel') { closeModal(); return; }
+      if (role === 'back') { openSettingsModal('about'); return; }
       if (role === 'reward') { openRewardModal(); return; }
-      if (role === 'openRelease') { openUrl(releaseUrl); return; }
-      if (role !== 'check' || checking) return;
-      if (!hasBridge()) {
-        box.className = 'about-result about-result--warn';
-        box.textContent = '演示模式下连不上更新服务器，装到本机后可以检查。';
-        return;
-      }
-      checking = true;
-      checkBtn.disabled = true;
-      checkBtn.textContent = '检查中…';
-      box.className = 'about-result';
-      box.textContent = '正在检查更新…';
-      send('app/checkUpdate');
+      if (role === 'openRelease') { openUrl(updateView().url); return; }
+      if (role === 'check') requestUpdate();
     });
 
-    var prevFocus = document.activeElement;
-    els.modalRoot.innerHTML = '';
-    els.modalRoot.appendChild(el);
-    setHidden(els.modalRoot, false);
-    modalState = { el: el, prevFocus: prevFocus, kind: 'about', onUpdate: showUpdate };
-
-    window.setTimeout(function () {
-      try { checkBtn.focus({ preventScroll: true }); } catch (err) { /* 忽略 */ }
-    }, 30);
+    swapModal(el, 'about', {
+      onUpdate: renderUpdate,
+      back: function () { openSettingsModal('about'); }
+    });
+    renderUpdate();
+    focusIn(el, '[data-role="check"]');
   }
 
   function openRewardModal() {
-    closeModal();
     var el = document.createElement('div');
     el.className = 'modal modal--wide';
     el.setAttribute('role', 'dialog');
@@ -4165,7 +4279,7 @@
     parts.push('<p class="gap-custom__hint">用支付宝或微信扫一扫即可，不用加好友。</p>');
     parts.push('</div>');
     parts.push('<div class="modal__foot">');
-    parts.push('<button type="button" class="btn btn--ghost" data-role="back">返回</button>');
+    parts.push('<button type="button" class="btn btn--ghost" data-role="back">返回关于</button>');
     parts.push('<button type="button" class="btn btn--ghost" data-role="cancel">关闭</button>');
     parts.push('</div>');
     el.innerHTML = parts.join('');
@@ -4178,15 +4292,8 @@
       else if (role === 'back') openAboutModal();
     });
 
-    var prevFocus = document.activeElement;
-    els.modalRoot.innerHTML = '';
-    els.modalRoot.appendChild(el);
-    setHidden(els.modalRoot, false);
-    modalState = { el: el, prevFocus: prevFocus, kind: 'reward' };
-
-    window.setTimeout(function () {
-      try { el.querySelector('[data-role="cancel"]').focus({ preventScroll: true }); } catch (err) { /* 忽略 */ }
-    }, 30);
+    swapModal(el, 'reward', { back: openAboutModal });
+    focusIn(el, '[data-role="cancel"]');
   }
 
   function bindPicker() {
@@ -4363,10 +4470,35 @@
     }
   }
 
+  var FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])';
+
+  // 弹窗是 aria-modal 的：Tab 不能跑到背后的页面上，否则焦点看不见、Enter 还会误触底层按钮。
+  function trapTab(e) {
+    var nodes = Array.prototype.slice.call(els.modalRoot.querySelectorAll(FOCUSABLE)).filter(function (n) {
+      return n.offsetParent !== null || n === document.activeElement;
+    });
+    if (nodes.length === 0) return;
+    var first = nodes[0];
+    var last = nodes[nodes.length - 1];
+    var active = document.activeElement;
+    if (!e.shiftKey && (active === last || !els.modalRoot.contains(active))) {
+      e.preventDefault();
+      first.focus({ preventScroll: true });
+    } else if (e.shiftKey && (active === first || !els.modalRoot.contains(active))) {
+      e.preventDefault();
+      last.focus({ preventScroll: true });
+    }
+  }
+
   function bindModal() {
     if (!els.modalRoot) return;
+    // 点遮罩表示「我要出去」，所以不管在哪一层都直接关掉整个弹窗；
+    // 想只退一级用 Esc 或底部的「返回」。
     els.modalRoot.addEventListener('mousedown', function (e) {
       if (e.target === els.modalRoot) closeModal();
+    });
+    els.modalRoot.addEventListener('keydown', function (e) {
+      if (e.key === 'Tab' && modalState) trapTab(e);
     });
   }
 
@@ -4417,7 +4549,10 @@
       if (e.key === 'Escape') {
         if (modalState) {
           e.preventDefault();
-          closeModal();
+          // 设置 → 关于 → 赞赏 是一层层进去的：Esc 先退回上一级，
+          // 到最外层（设置或普通确认框）才真的关掉。
+          if (typeof modalState.back === 'function') modalState.back();
+          else closeModal();
           return;
         }
         if (state.mode === 'game' && state.game.unlock && state.game.unlock.active) {
@@ -4523,7 +4658,7 @@
   }
 
   window.SAM = {
-    version: '1.9.9',
+    version: '1.9.10',
     handleEvent: handleEvent,
     mock: enterMock,
     getState: function () {

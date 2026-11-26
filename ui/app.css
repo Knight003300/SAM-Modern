@@ -1473,7 +1473,9 @@ dt {
   display: flex;
   flex-direction: column;
   gap: var(--s2);
-  z-index: 40;
+  /* 要比模态的遮罩（50）高：设置里点外链时提示是从模态里发出来的，
+     压在遮罩下面等于没提示。 */
+  z-index: 60;
   pointer-events: none;
 }
 
@@ -2166,6 +2168,28 @@ dt {
   width: 12px;
   height: 12px;
   display: block;
+}
+
+/* 检查更新那一行：结果直接写在描述行里，有新版时整行点亮 */
+/* 检查中不用 :disabled（会把焦点甩到 body），只标记状态、挡住重复请求 */
+.set-row.is-busy {
+  cursor: progress;
+}
+
+.set-row.is-busy:hover {
+  background: var(--bg-2);
+}
+
+.set-row.is-busy .set-row__desc {
+  color: var(--text-2);
+}
+
+.set-row.is-new .set-row__desc {
+  color: var(--accent);
+}
+
+.btn.is-busy {
+  cursor: progress;
 }
 
 /* 关于：版本行 + 操作按钮 + 更新结果 */
