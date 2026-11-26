@@ -24,7 +24,7 @@ window.chrome.webview.addEventListener('message', e => handle(e.data));
 - `{ ev:"status", text:"...", busy:true|false }` 状态栏文案 + 是否转圈。
 - `{ ev:"toast", kind:"info"|"success"|"error"|"warn", title:"...", text:"..." }` 右上角浮层提示（自动消失）。
 - `{ ev:"error", title:"...", text:"..." }` 需用户确认的错误（模态）。
-- `{ ev:"appInfo", version:"1.9.9", releasesUrl:"https://..." }` 启动完成（`ui/ready` 处理完之后）发一次。版本号只有 C# 的 `AppInfo.Version` 这一份，页面「关于」直接显示它，**不要在 JS 里再写一遍**；`releasesUrl` 是发布页兜底地址。
+- `{ ev:"appInfo", version:"1.9.9", releasesUrl:"https://..." }` 启动完成（`ui/ready` 处理完之后）发一次。真实运行时的版本号以 C# 的 `AppInfo.Version` 为准，页面「关于」直接显示它（JS 里那一份只给演示模式用）；`releasesUrl` 是发布页兜底地址。
 - `{ ev:"updateResult", current:"1.9.9", ok:boolean, failure?, tag?, name?, url?, body?, newer? }` 对应 `app/checkUpdate` 的回包。`ok=false` 时只有 `failure`（可直接展示的原因文案）；`ok=true` 时 `tag`/`name`/`url`/`body` 来自 GitHub 最新 release，`newer` 是 C# 逐段比较版本号的结果（远程解析不出来时一律 `false`，当作没有新版）。
 - `{ ev:"window", maximized:boolean }` 窗口最大化状态变化（按钮、双击标题栏、Win+↑/↓、拖到屏幕顶部触发 Aero Snap 都会发）。UI 据此把最大化按钮的图标与 `title` 在「最大化 / 还原」之间切换。`ui/ready` 之后也会补发一次当前状态。
 
