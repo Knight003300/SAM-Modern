@@ -993,6 +993,7 @@ namespace SAM.Modern
             this._webReady = true;
 
             this.Bridge.Flush();
+            this.SendAppInfo();
             this.OnPageReady();
             try
             {
@@ -1207,7 +1208,142 @@ namespace SAM.Modern
                 this.SendSchedulePool(message);
                 return;
             }
+            if (string.Equals(cmd, "app/checkUpdate", StringComparison.Ordinal))
+            {
+                this.CheckUpdate();
+                return;
+            }
+            if (string.Equals(cmd, "app/openUrl", StringComparison.Ordinal))
+            {
+                this.OpenUrlCommand(message);
+                return;
+            }
             Log.Write("unhandled command: " + cmd);
+        }
+
+        /// <summary>
+        /// 把版本号、下载页地址告诉页面。版本号只有 AppInfo.Version 这一份，
+        /// 页面上的「关于」直接显示它，不在 JS 里再写一遍。
+        /// </summary>
+        private void SendAppInfo()
+        {
+            var b = new JsonBuilder();
+            b.BeginObject()
+                .Name("ev").Str("appInfo")
+                .Name("version").Str(AppInfo.Version)
+                .Name("releasesUrl").Str(AppInfo.ReleasesUrl)
+                .EndObject();
+            this.Channel.Send(b);
+        }
+
+        /// <summary>
+        /// 检查更新：HTTP 要好几秒，放后台线程，拿到结果再回 UI 线程发出去。
+        /// 失败只算「检查失败」，不弹错误框。
+        /// </summary>
+        private void CheckUpdate()
+        {
+            this.Bridge.Status("正在检查更新…", true);
+            System.Threading.Tasks.Task.Run(delegate
+            {
+                AppInfo.UpdateResult result = null;
+                try
+                {
+                    result = AppInfo.CheckUpdate();
+                }
+                catch (Exception error)
+                {
+                    Log.Write("update: unexpected failure", error);
+                }
+                try
+                {
+                    this.BeginInvoke((Action)delegate
+                    {
+                        this.Bridge.Status(string.Empty, false);
+                        this.SendUpdateResult(result);
+                    });
+                }
+                catch (Exception)
+                {
+                    // 窗口已经关了，没人收这个结果，丢掉即可。
+                }
+            });
+        }
+
+        private void SendUpdateResult(AppInfo.UpdateResult result)
+        {
+            var b = new JsonBuilder();
+            b.BeginObject()
+                .Name("ev").Str("updateResult")
+                .Name("current").Str(AppInfo.Version)
+                .Name("ok").Bool(result != null && result.Ok);
+            if (result == null || result.Ok == false)
+            {
+                string failure = result != null ? result.Failure : null;
+                if (string.IsNullOrEmpty(failure)) failure = "检查更新失败，请稍后再试。";
+                b.Name("failure").Str(failure);
+            }
+            else
+            {
+                b.Name("tag").Str(result.Tag)
+                    .Name("name").Str(result.Name)
+                    .Name("url").Str(result.Url)
+                    .Name("body").Str(result.Body)
+                    .Name("newer").Bool(IsNewerVersion(result.Tag, AppInfo.Version));
+            }
+            b.EndObject();
+            this.Channel.Send(b);
+        }
+
+        private void OpenUrlCommand(Dictionary<string, object> message)
+        {
+            string url = JsonParser.GetString(message, "url");
+            try
+            {
+                if (AppInfo.OpenUrl(url) == false)
+                {
+                    this.Bridge.Toast("warn", "打不开这个链接", "只支持 http / https 地址。");
+                    return;
+                }
+                Log.Write("app: opened url " + url);
+            }
+            catch (Exception error)
+            {
+                Log.Write("app: open url failed " + url, error);
+                this.Bridge.Toast("error", "打不开这个链接", "系统没能启动浏览器，可以手动打开：" + url);
+            }
+        }
+
+        /// <summary>比较 "v1.9.10" 与 "1.9.9" 这类版本号；远程解析不出来就当没有新版。</summary>
+        private static bool IsNewerVersion(string remote, string current)
+        {
+            int[] left = ParseVersion(remote);
+            if (left == null) return false;
+            int[] right = ParseVersion(current);
+            if (right == null) return true;
+            int count = Math.Max(left.Length, right.Length);
+            for (int i = 0; i < count; i++)
+            {
+                int a = i < left.Length ? left[i] : 0;
+                int c = i < right.Length ? right[i] : 0;
+                if (a != c) return a > c;
+            }
+            return false;
+        }
+
+        private static int[] ParseVersion(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return null;
+            string value = text.Trim();
+            if (value.Length > 0 && (value[0] == 'v' || value[0] == 'V')) value = value.Substring(1);
+            string[] parts = value.Split('.');
+            var numbers = new List<int>();
+            for (int i = 0; i < parts.Length; i++)
+            {
+                int number;
+                if (int.TryParse(parts[i], NumberStyles.Integer, CultureInfo.InvariantCulture, out number) == false) return null;
+                numbers.Add(number);
+            }
+            return numbers.Count == 0 ? null : numbers.ToArray();
         }
 
         /// <summary>

@@ -67,7 +67,9 @@
     ui: { tab: 'achievements', query: '', filter: 'all' },
     pending: { ach: {}, stats: {} },
     saving: false,
-    schedule: { jobs: [], loaded: false }
+    schedule: { jobs: [], loaded: false },
+    // 版本号以主机下发的 appInfo 为准（AppInfo.cs 里那一份）；这里的值只是没有主机时的回退。
+    app: { version: '', releasesUrl: '' }
   };
 
   // 打开过的游戏记下「已解锁 / 总数」，卡片第二行才有东西可显示。
@@ -350,6 +352,12 @@
         break;
       case 'schedulePool':
         onSchedulePool(ev);
+        break;
+      case 'appInfo':
+        onAppInfo(ev);
+        break;
+      case 'updateResult':
+        onUpdateResult(ev);
         break;
       case 'mock':
         if (!state.mock) enterMock();
@@ -3709,6 +3717,7 @@
     els.mockChip = document.getElementById('mockChip');
     els.userChip = document.getElementById('userChip');
     els.scheduleChip = document.getElementById('scheduleChip');
+    els.btnSettings = document.getElementById('btnSettings');
     els.scheduleChipText = document.getElementById('scheduleChipText');
     els.btnMin = document.getElementById('btnMin');
     els.btnMax = document.getElementById('btnMax');
@@ -3792,6 +3801,7 @@
     if (els.btnMax) els.btnMax.addEventListener('click', function () { send('win/maximize'); });
     if (els.btnClose) els.btnClose.addEventListener('click', function () { send('win/close'); });
     if (els.scheduleChip) els.scheduleChip.addEventListener('click', openScheduleListModal);
+    if (els.btnSettings) els.btnSettings.addEventListener('click', openSettingsModal);
 
     var bar = document.getElementById('titlebar');
     if (bar) {
@@ -3945,6 +3955,237 @@
     sync();
     window.setTimeout(function () {
       try { input.focus({ preventScroll: true }); } catch (err) { /* 忽略 */ }
+    }, 30);
+  }
+
+  /* ---------- 设置 / 关于 / 检查更新 / 赞赏作者 ---------- */
+
+  var SVG_CHEV = '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4.4 2.6 8 6l-3.6 3.4"/></svg>';
+  var SVG_GEAR = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.1"/><path d="M8 1.9v1.5M8 12.6v1.5M14.1 8h-1.5M3.4 8H1.9M12.3 3.7l-1.1 1.1M4.8 11.2l-1.1 1.1M12.3 12.3l-1.1-1.1M4.8 4.8 3.7 3.7"/></svg>';
+  var HOME_URL = 'https://github.com/Knight003300/SAM-Modern';
+  var RELEASES_URL = 'https://github.com/Knight003300/SAM-Modern/releases/latest';
+
+  // 版本号只认主机下发的 appInfo（C# 的 AppInfo.cs）；window.SAM.version 只是没有主机时的回退值。
+  function appVersion() {
+    return state.app.version || window.SAM.version || '';
+  }
+
+  function appReleasesUrl() {
+    return state.app.releasesUrl || RELEASES_URL;
+  }
+
+  function onAppInfo(ev) {
+    state.app.version = String(ev.version || '');
+    state.app.releasesUrl = String(ev.releasesUrl || '');
+  }
+
+  // 检查更新是异步的：结果回到「关于」弹窗里就地显示。
+  function onUpdateResult(ev) {
+    if (modalState && modalState.kind === 'about' && typeof modalState.onUpdate === 'function') {
+      modalState.onUpdate(ev);
+    }
+  }
+
+  function openUrl(url) {
+    if (!url) return;
+    if (!hasBridge()) {
+      toast('info', '演示模式', '这里会打开 ' + url + '；装到本机后可以直接跳转。');
+      return;
+    }
+    send('app/openUrl', { url: url });
+  }
+
+  function settingsRowHtml(role, label, desc) {
+    return '<button type="button" class="set-row" data-role="' + role + '">' +
+      '<span class="set-row__main">' +
+      '<span class="set-row__label">' + esc(label) + '</span>' +
+      '<span class="set-row__desc">' + esc(desc) + '</span>' +
+      '</span><span class="set-row__chev">' + SVG_CHEV + '</span></button>';
+  }
+
+  function openSettingsModal() {
+    closeModal();
+    var el = document.createElement('div');
+    el.className = 'modal';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'true');
+
+    var parts = [];
+    parts.push('<div class="modal__body">');
+    parts.push('<div class="modal__head">');
+    parts.push('<span class="modal__ico modal__ico--info">' + SVG_GEAR + '</span>');
+    parts.push('<h2 class="modal__title">设置</h2>');
+    parts.push('</div>');
+    parts.push('<div class="set-list">');
+    parts.push(settingsRowHtml('about', '关于', '版本 ' + appVersion() + ' · 检查更新 · 赞赏作者'));
+    parts.push(settingsRowHtml('home', '项目主页', 'github.com/Knight003300/SAM-Modern'));
+    parts.push(settingsRowHtml('latest', '下载最新版', '在浏览器打开发布页'));
+    parts.push('</div>');
+    parts.push('</div>');
+    parts.push('<div class="modal__foot">');
+    parts.push('<button type="button" class="btn btn--ghost" data-role="cancel">关闭</button>');
+    parts.push('</div>');
+    el.innerHTML = parts.join('');
+
+    el.addEventListener('click', function (e) {
+      var hit = e.target.closest ? e.target.closest('[data-role]') : null;
+      if (!hit) return;
+      var role = hit.getAttribute('data-role');
+      if (role === 'cancel') closeModal();
+      else if (role === 'about') openAboutModal();
+      else if (role === 'home') openUrl(HOME_URL);
+      else if (role === 'latest') openUrl(appReleasesUrl());
+    });
+
+    var prevFocus = document.activeElement;
+    els.modalRoot.innerHTML = '';
+    els.modalRoot.appendChild(el);
+    setHidden(els.modalRoot, false);
+    modalState = { el: el, prevFocus: prevFocus, kind: 'settings' };
+
+    window.setTimeout(function () {
+      try { el.querySelector('.set-row').focus({ preventScroll: true }); } catch (err) { /* 忽略 */ }
+    }, 30);
+  }
+
+  function openAboutModal() {
+    closeModal();
+    var el = document.createElement('div');
+    el.className = 'modal';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'true');
+
+    var parts = [];
+    parts.push('<div class="modal__body">');
+    parts.push('<div class="modal__head">');
+    parts.push('<span class="modal__ico modal__ico--info">' + ICON.info + '</span>');
+    parts.push('<h2 class="modal__title">关于</h2>');
+    parts.push('</div>');
+    parts.push('<div class="about-hero">');
+    parts.push('<span class="about-hero__name">Steam 成就管理器 · SAM</span>');
+    parts.push('<span class="about-hero__ver">v' + esc(appVersion()) + '</span>');
+    parts.push('</div>');
+    parts.push('<p class="modal__text">用来查看、编辑和解锁 Steam 成就与统计的小工具。' +
+      '数据直接写进 Steam，改完记得保存。</p>');
+    parts.push('<div class="about-acts">');
+    parts.push('<button type="button" class="btn btn--primary" data-role="check">检查更新</button>');
+    parts.push('<button type="button" class="btn btn--ghost" data-role="reward">赞赏作者</button>');
+    parts.push('</div>');
+    parts.push('<div class="about-result" data-role="updateBox">当前版本 v' + esc(appVersion()) + '。</div>');
+    parts.push('</div>');
+    parts.push('<div class="modal__foot">');
+    parts.push('<button type="button" class="btn btn--ghost" data-role="cancel">关闭</button>');
+    parts.push('</div>');
+    el.innerHTML = parts.join('');
+
+    var checkBtn = el.querySelector('[data-role="check"]');
+    var box = el.querySelector('[data-role="updateBox"]');
+    var checking = false;
+    // 有新版时优先用服务器给的发布页地址（可能不是 latest 那个 URL）。
+    var releaseUrl = appReleasesUrl();
+
+    function showUpdate(ev) {
+      checking = false;
+      checkBtn.disabled = false;
+      checkBtn.textContent = '检查更新';
+      if (!ev || ev.ok !== true) {
+        box.className = 'about-result about-result--warn';
+        box.textContent = (ev && ev.failure) || '检查更新失败，请稍后再试。';
+        return;
+      }
+      if (!ev.newer) {
+        box.className = 'about-result about-result--ok';
+        box.textContent = '已经是最新版本（v' + (ev.current || appVersion()) + '）。';
+        return;
+      }
+      releaseUrl = String(ev.url || '') || appReleasesUrl();
+      var tag = String(ev.tag || '');
+      var name = String(ev.name || '');
+      box.className = 'about-result about-result--new';
+      box.innerHTML = '<span class="about-result__title">发现新版本 ' + esc(tag || name) + '</span>' +
+        (name && name !== tag ? '<span class="about-result__sub">' + esc(name) + '</span>' : '') +
+        '<button type="button" class="btn btn--primary btn--sm" data-role="openRelease">打开发布页</button>';
+    }
+
+    el.addEventListener('click', function (e) {
+      var hit = e.target.closest ? e.target.closest('[data-role]') : null;
+      if (!hit) return;
+      var role = hit.getAttribute('data-role');
+      if (role === 'cancel') { closeModal(); return; }
+      if (role === 'reward') { openRewardModal(); return; }
+      if (role === 'openRelease') { openUrl(releaseUrl); return; }
+      if (role !== 'check' || checking) return;
+      if (!hasBridge()) {
+        box.className = 'about-result about-result--warn';
+        box.textContent = '演示模式下连不上更新服务器，装到本机后可以检查。';
+        return;
+      }
+      checking = true;
+      checkBtn.disabled = true;
+      checkBtn.textContent = '检查中…';
+      box.className = 'about-result';
+      box.textContent = '正在检查更新…';
+      send('app/checkUpdate');
+    });
+
+    var prevFocus = document.activeElement;
+    els.modalRoot.innerHTML = '';
+    els.modalRoot.appendChild(el);
+    setHidden(els.modalRoot, false);
+    modalState = { el: el, prevFocus: prevFocus, kind: 'about', onUpdate: showUpdate };
+
+    window.setTimeout(function () {
+      try { checkBtn.focus({ preventScroll: true }); } catch (err) { /* 忽略 */ }
+    }, 30);
+  }
+
+  function openRewardModal() {
+    closeModal();
+    var el = document.createElement('div');
+    el.className = 'modal modal--wide';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'true');
+
+    var parts = [];
+    parts.push('<div class="modal__body">');
+    parts.push('<div class="modal__head">');
+    parts.push('<span class="modal__ico modal__ico--info">' + ICON.success + '</span>');
+    parts.push('<h2 class="modal__title">赞赏作者</h2>');
+    parts.push('</div>');
+    parts.push('<p class="modal__text">这个工具一直是免费的。如果它帮你省了点时间，' +
+      '可以扫下面的码请作者喝杯咖啡，多少都行，心意到了就好。</p>');
+    parts.push('<div class="reward-grid">');
+    parts.push('<figure class="reward-item">' +
+      '<img class="reward-item__img" src="reward-alipay.jpg" alt="支付宝收款码" />' +
+      '<figcaption class="reward-item__cap">支付宝</figcaption></figure>');
+    parts.push('<figure class="reward-item">' +
+      '<img class="reward-item__img" src="reward-wechat.png" alt="微信赞赏码" />' +
+      '<figcaption class="reward-item__cap">微信赞赏</figcaption></figure>');
+    parts.push('</div>');
+    parts.push('<p class="gap-custom__hint">用支付宝或微信扫一扫即可，不用加好友。</p>');
+    parts.push('</div>');
+    parts.push('<div class="modal__foot">');
+    parts.push('<button type="button" class="btn btn--ghost" data-role="back">返回</button>');
+    parts.push('<button type="button" class="btn btn--ghost" data-role="cancel">关闭</button>');
+    parts.push('</div>');
+    el.innerHTML = parts.join('');
+
+    el.addEventListener('click', function (e) {
+      var hit = e.target.closest ? e.target.closest('[data-role]') : null;
+      if (!hit) return;
+      var role = hit.getAttribute('data-role');
+      if (role === 'cancel') closeModal();
+      else if (role === 'back') openAboutModal();
+    });
+
+    var prevFocus = document.activeElement;
+    els.modalRoot.innerHTML = '';
+    els.modalRoot.appendChild(el);
+    setHidden(els.modalRoot, false);
+    modalState = { el: el, prevFocus: prevFocus, kind: 'reward' };
+
+    window.setTimeout(function () {
+      try { el.querySelector('[data-role="cancel"]').focus({ preventScroll: true }); } catch (err) { /* 忽略 */ }
     }, 30);
   }
 
@@ -4282,7 +4523,7 @@
   }
 
   window.SAM = {
-    version: '1.9.8',
+    version: '1.9.9',
     handleEvent: handleEvent,
     mock: enterMock,
     getState: function () {

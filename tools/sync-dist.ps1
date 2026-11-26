@@ -38,7 +38,7 @@ foreach ($md in @(Get-ChildItem -LiteralPath $root -File | Where-Object { $_.Ext
 }
 $distUi = Join-Path $dist 'ui'
 New-Item -ItemType Directory -Force -Path $distUi | Out-Null
-foreach ($n in @('index.html','app.css','app.js')) {
+foreach ($n in @('index.html','app.css','app.js','reward-alipay.jpg','reward-wechat.png')) {
   Copy-Item -LiteralPath (Join-Path (Join-Path $build 'ui') $n) -Destination (Join-Path $distUi $n) -Force
   'copied ui\' + $n
 }

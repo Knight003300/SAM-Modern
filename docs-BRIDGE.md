@@ -24,6 +24,8 @@ window.chrome.webview.addEventListener('message', e => handle(e.data));
 - `{ ev:"status", text:"...", busy:true|false }` 状态栏文案 + 是否转圈。
 - `{ ev:"toast", kind:"info"|"success"|"error"|"warn", title:"...", text:"..." }` 右上角浮层提示（自动消失）。
 - `{ ev:"error", title:"...", text:"..." }` 需用户确认的错误（模态）。
+- `{ ev:"appInfo", version:"1.9.9", releasesUrl:"https://..." }` 启动完成（`ui/ready` 处理完之后）发一次。版本号只有 C# 的 `AppInfo.Version` 这一份，页面「关于」直接显示它，**不要在 JS 里再写一遍**；`releasesUrl` 是发布页兜底地址。
+- `{ ev:"updateResult", current:"1.9.9", ok:boolean, failure?, tag?, name?, url?, body?, newer? }` 对应 `app/checkUpdate` 的回包。`ok=false` 时只有 `failure`（可直接展示的原因文案）；`ok=true` 时 `tag`/`name`/`url`/`body` 来自 GitHub 最新 release，`newer` 是 C# 逐段比较版本号的结果（远程解析不出来时一律 `false`，当作没有新版）。
 - `{ ev:"window", maximized:boolean }` 窗口最大化状态变化（按钮、双击标题栏、Win+↑/↓、拖到屏幕顶部触发 Aero Snap 都会发）。UI 据此把最大化按钮的图标与 `title` 在「最大化 / 还原」之间切换。`ui/ready` 之后也会补发一次当前状态。
 
 ### Picker（选游戏界面）
@@ -63,6 +65,10 @@ window.chrome.webview.addEventListener('message', e => handle(e.data));
 - `{cmd:"ui/painted", layoutMs:number, imageMs:number}`  首帧真正画完（含布局与可见图片解码）时发一次。C# 收到它才把窗口从屏幕外挪进来，保证用户看不到空壳或半截渲染。
 - `{cmd:"ui/error", kind, message, source, stack}`  页面异常回传，C# 只记日志（`sam-modern.log` 里是 `ui <kind>:`）。
 
+应用级（两种模式都可用，命令在 `WebShell` 基类里）：
+- `{cmd:"app/checkUpdate"}`  后台线程请求 GitHub `releases/latest`（12 秒超时），结果回 `updateResult` 事件。检查期间状态栏显示「正在检查更新…」。失败不弹错误框。
+- `{cmd:"app/openUrl", url:string}`  用系统默认浏览器打开链接。**只放行 `http://` / `https://`**，其它协议一律拒绝并 toast 提示。
+
 Picker：
 - `{cmd:"picker/reload"}`  重新扫描游戏库
 - `{cmd:"game/open", id:number}`  打开某个游戏的成就管理窗口
@@ -91,7 +97,7 @@ Game：
 - `{cmd:"schedule/run", id:string}`  把某条任务的时刻改成「现在」并立刻拉起解锁进程（任务已进入准备中 / 解锁中时拒绝）
 - `{cmd:"schedule/pool", appId:number}`  读 `<程序目录>\cache\game-<appId>.json` 的成就快照，回一帧 `schedulePool`（不连 Steam，所以游戏库窗口也能同步用）
 
-定时任务的执行是**独立隐藏进程**：调度器在 `at - 25s` 时 `Process.Start(自身 exe, "--run-job <job 文件>")`，`UseShellExecute=false`、`CreateNoWindow=true`，该进程不建窗口、不初始化 WebView2，只做 `SetAchievement` + `StoreStats` 并写回 `result-<id>.json`。因此**程序退出后任务不会执行**。
+定时任务的执行是**独立隐藏进程**：调度器在 `at - 40s` 时 `Process.Start(自身 exe, "--run-job <job 文件>")`，`UseShellExecute=false`、`CreateNoWindow=true`，该进程不建窗口、不初始化 WebView2，只做 `SetAchievement` + `StoreStats` 并写回 `result-<id>.json`。因此**程序退出后任务不会执行**。
 
 ## 5. Mock 模式
 页面在 `chrome.webview` 不存在、或收到 `{ev:"mock"}` 时，用内置假数据渲染（≥12 个游戏、≥40 个成就、≥15 个统计），保证可以离线预览视觉效果。

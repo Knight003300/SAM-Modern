@@ -2065,6 +2065,185 @@ dt {
   color: var(--text-3);
 }
 
+/* 标题栏的设置入口：图标按钮，和定时入口同一套观感 */
+.chip--icon {
+  -webkit-app-region: no-drag;
+  cursor: pointer;
+  padding: 0;
+  width: 18px;
+  justify-content: center;
+}
+
+.chip--icon svg {
+  width: 13px;
+  height: 13px;
+  display: block;
+}
+
+.chip--icon:hover {
+  color: var(--text-1);
+}
+
+/* 设置弹窗里的入口列表 */
+.set-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin-top: var(--s4);
+}
+
+.set-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  width: 100%;
+  padding: var(--s2) var(--s3);
+  border: 0;
+  border-radius: var(--r);
+  background: var(--bg-2);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur) var(--ease);
+}
+
+.set-row:hover {
+  background: var(--bg-3);
+}
+
+.set-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.set-row__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.set-row__label {
+  font-size: var(--t-body);
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.set-row__desc {
+  font-size: var(--t-micro);
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.set-row__chev {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  color: var(--text-3);
+}
+
+.set-row__chev svg {
+  width: 12px;
+  height: 12px;
+  display: block;
+}
+
+/* 关于：版本行 + 操作按钮 + 更新结果 */
+.about-hero {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  margin-top: var(--s3);
+}
+
+.about-hero__name {
+  font-size: var(--t-body);
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.about-hero__ver {
+  font-size: var(--t-micro);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.about-acts {
+  display: flex;
+  gap: var(--s2);
+  margin-top: var(--s4);
+}
+
+.about-result {
+  margin-top: var(--s3);
+  padding: var(--s2) var(--s3);
+  border-radius: var(--r);
+  background: var(--bg-2);
+  font-size: var(--t-body);
+  line-height: 20px;
+  color: var(--text-2);
+}
+
+.about-result--ok {
+  color: var(--accent);
+}
+
+.about-result--warn {
+  color: var(--danger);
+}
+
+.about-result--new {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s2);
+  color: var(--text-1);
+}
+
+.about-result__title {
+  font-weight: 600;
+}
+
+.about-result__sub {
+  font-size: var(--t-micro);
+  color: var(--text-3);
+}
+
+/* 赞赏：两张码并排 */
+.reward-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s3);
+  margin-top: var(--s4);
+}
+
+.reward-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s2);
+  margin: 0;
+  min-width: 0;
+}
+
+.reward-item__img {
+  display: block;
+  width: 100%;
+  height: 230px;
+  object-fit: contain;
+  border-radius: var(--r);
+  background: var(--bg-2);
+}
+
+.reward-item__cap {
+  font-size: var(--t-micro);
+  color: var(--text-3);
+}
+
 /* 标题栏的定时入口：做成可点按钮，hover 时提亮 */
 .chip--schedule {
   -webkit-app-region: no-drag;
