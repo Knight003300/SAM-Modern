@@ -48,6 +48,10 @@
 
   --dur: 140ms;
   --ease: cubic-bezier(.4, 0, .2, 1);
+  /* 入场专用：起手快、收尾软。CSS 内置 ease-out 太弱，200ms 的弹窗会显得拖 */
+  --ease-out: cubic-bezier(.23, 1, .32, 1);
+  /* 按下反馈：比 --ease 更干脆，110ms 内必须结束 */
+  --ease-press: cubic-bezier(.2, 0, 0, 1);
 
   --titlebar-h: 48px;
   --toolbar-h: 48px;
@@ -110,6 +114,23 @@ dt {
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+/* 整块可点的元素（卡片、成就行、选项按钮）：焦点环往里收，贴着自身边缘画，
+   否则 offset 正 1px 会压到相邻卡片上，看上去像两个元素都选中了。 */
+.ach:focus-visible,
+.game-card:focus-visible,
+.opt:focus-visible,
+.seg__item:focus-visible {
+  outline-offset: -2px;
+}
+
+/* 用 <label> 包复选框的行：焦点实际落在里面的 checkbox 上，行本身要给反馈，
+   否则键盘用户看不出光标停在哪一行。 */
+.sch-game:has(.sch-game__box:focus-visible),
+.sch-ach:has(.sch-ach__box:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 /* ---------------------------------------------------------------------------
@@ -211,6 +232,7 @@ dt {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: color var(--dur) var(--ease), transform 110ms var(--ease-press);
 }
 
 .chip__dot {
@@ -239,7 +261,8 @@ dt {
   height: 24px;
   border-radius: var(--r);
   color: var(--text-3);
-  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease),
+    transform 110ms var(--ease-press);
 }
 
 .winbtn svg {
@@ -254,6 +277,7 @@ dt {
 
 .winbtn:active {
   background: var(--bg-3);
+  transform: scale(.94);
 }
 
 .winbtn--close:hover {
@@ -347,6 +371,8 @@ dt {
   flex: none;
   border-radius: var(--r);
   color: var(--text-3);
+  transition: color var(--dur) var(--ease), background var(--dur) var(--ease),
+    transform 110ms var(--ease-press);
 }
 
 .search__clear[hidden] {
@@ -361,6 +387,10 @@ dt {
 .search__clear:hover {
   color: var(--text-1);
   background: var(--bg-3);
+}
+
+.search__clear:active {
+  transform: scale(.9);
 }
 
 /* 分段控件 -------------------------------------------------------------- */
@@ -380,7 +410,12 @@ dt {
   font-weight: 400;
   color: var(--text-3);
   white-space: nowrap;
-  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease),
+    transform 110ms var(--ease-press);
+}
+
+.seg__item:active {
+  transform: scale(.97);
 }
 
 .seg__item:hover {
@@ -454,6 +489,8 @@ dt {
 
 /* 按钮 ------------------------------------------------------------------ */
 
+/* 按下反馈：颜色变深之外再缩一点，点下去才「有回音」。0.97 是手感阈值，
+   再小就像按钮被压扁；110ms 比 hover 的 140ms 快，因为按下要立刻响应。 */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -467,7 +504,8 @@ dt {
   color: var(--text-2);
   background: var(--bg-2);
   white-space: nowrap;
-  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease),
+    transform 110ms var(--ease-press);
 }
 
 .btn:hover:not(:disabled) {
@@ -477,6 +515,7 @@ dt {
 
 .btn:active:not(:disabled) {
   background: var(--bg-3);
+  transform: scale(.97);
 }
 
 .btn:disabled {
@@ -633,15 +672,18 @@ dt {
   background: var(--bg-1);
   overflow: hidden;
   text-align: left;
-  transition: background var(--dur) var(--ease);
+  transition: background var(--dur) var(--ease),
+    transform 110ms var(--ease-press);
 }
 
 .game-card:hover {
   background: var(--bg-2);
 }
 
+/* 卡片面积大，缩放幅度要更小：0.985 已经足够看出「按进去了」 */
 .game-card:active {
   background: var(--bg-3);
+  transform: scale(.985);
 }
 
 .game-card__cover {
@@ -749,15 +791,25 @@ dt {
   overflow: hidden;
 }
 
+/* 骨架屏改成一道扫光：opacity 呼吸会让整片网格反复重绘，扫光只动 transform。 */
 .skel__cover {
+  position: relative;
   aspect-ratio: 16 / 9;
   background: var(--bg-2);
-  animation: skel-pulse 1.4s ease-in-out infinite;
+  overflow: hidden;
 }
 
-@keyframes skel-pulse {
-  0%, 100% { opacity: .55; }
-  50% { opacity: 1; }
+.skel__cover::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, var(--bg-3), transparent);
+  transform: translateX(-100%);
+  animation: skel-sweep 1.4s var(--ease) infinite;
+}
+
+@keyframes skel-sweep {
+  to { transform: translateX(100%); }
 }
 
 /* 游戏详情 -------------------------------------------------------------- */
@@ -863,13 +915,17 @@ dt {
   overflow: hidden;
 }
 
+/* 进度条只动 transform：width 会触发布局与重绘，scaleX 走合成层。
+   代价是圆角被横向压扁（2px 高的条上看不出来），换来的是掉帧场景下也顺。 */
 .progress__fill {
   display: block;
   height: 100%;
-  width: 0;
+  width: 100%;
   border-radius: 99px;
   background: var(--accent);
-  transition: width 320ms var(--ease);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 320ms var(--ease);
 }
 
 .progress__meta {
@@ -991,8 +1047,15 @@ dt {
   display: none;
 }
 
+/* 屏幕外的行跳过布局与绘制（content-visibility），300+ 条也能一次渲染完。
+   contain-intrinsic-size 给的是行高估值（图标 40 + 上下内边距 8×2），
+   带 auto 关键字后浏览器会记住真实高度，滚动条不会跳。 */
 .ach {
   display: grid;
+  content-visibility: auto;
+  /* 这里写的是内容盒高度：真实行高 56 = 40 + 上下内边距 8×2。
+     写 56 会让屏幕外的行按 72 估，滚动条长度和实际不符。 */
+  contain-intrinsic-size: auto 40px;
   grid-template-columns: 40px minmax(0, 1fr) auto 16px;
   grid-template-areas:
     "icon name foot check"
@@ -1005,11 +1068,18 @@ dt {
   border-radius: var(--r);
   background: none;
   text-align: left;
-  transition: background var(--dur) var(--ease);
+  transition: background var(--dur) var(--ease),
+    transform 110ms var(--ease-press);
 }
 
 .ach:hover {
   background: var(--bg-2);
+}
+
+/* 整行都很宽，缩放只取 0.995；再多就会觉得列表在抖 */
+.ach:active {
+  background: var(--bg-3);
+  transform: scale(.995);
 }
 
 .ach__icon {
@@ -1187,10 +1257,12 @@ dt {
 .unlock-bar__fill {
   display: block;
   height: 100%;
-  width: 0;
+  width: 100%;
   border-radius: 99px;
   background: var(--accent);
-  transition: width 320ms var(--ease);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 320ms var(--ease);
 }
 
 /* ---------------------------------------------------------------------------
@@ -1479,6 +1551,8 @@ dt {
   pointer-events: none;
 }
 
+/* 用 transition 而不是 keyframes：连续来三条提示时，第二条能接着第一条的
+   位置继续滑，而不是各自从零重播。入场 180ms（够看出方向），退场 140ms。 */
 .toast {
   display: flex;
   align-items: flex-start;
@@ -1489,17 +1563,24 @@ dt {
   background: var(--bg-2);
   box-shadow: var(--shadow-overlay);
   pointer-events: auto;
-  animation: toast-in 180ms var(--ease);
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 180ms var(--ease-out), transform 180ms var(--ease-out);
+}
+
+/* 入场：从下方 6px 处淡入。用 @starting-style 而不是给节点加 class，
+   WebView2 158 起原生支持；节点插进 DOM 的那一帧就是起始态，不需要 JS 参与。 */
+.toast {
+  @starting-style {
+    opacity: 0;
+    transform: translateY(6px);
+  }
 }
 
 .toast.is-out {
   opacity: 0;
   transform: translateY(4px);
-  transition: opacity 160ms var(--ease), transform 160ms var(--ease);
-}
-
-@keyframes toast-in {
-  from { opacity: 0; transform: translateY(6px); }
+  transition-duration: 140ms;
 }
 
 .toast__icon {
@@ -1555,11 +1636,17 @@ dt {
   flex: none;
   border-radius: var(--r);
   color: var(--text-3);
+  transition: color var(--dur) var(--ease), background var(--dur) var(--ease),
+    transform 110ms var(--ease-press);
 }
 
 .toast__close svg {
   width: 10px;
   height: 10px;
+}
+
+.toast__close:active {
+  transform: scale(.9);
 }
 
 .toast__close:hover {
@@ -1579,7 +1666,7 @@ dt {
   padding: var(--s5);
   background: rgba(0, 0, 0, .6);
   z-index: 50;
-  animation: fade-in 140ms var(--ease);
+  animation: fade-in 160ms var(--ease-out);
 }
 
 .modal-root[hidden] {
@@ -1588,6 +1675,21 @@ dt {
 
 @keyframes fade-in {
   from { opacity: 0; }
+}
+
+/* 退场：遮罩淡出 + 弹窗往下沉 4px。比入场快（120ms vs 200ms），
+   因为「关掉」是用户已经决定的事，不该让他等。 */
+.modal-root.is-closing {
+  animation: none;
+  opacity: 0;
+  transition: opacity 120ms var(--ease-out);
+}
+
+.modal-root.is-closing .modal {
+  animation: none;
+  opacity: 0;
+  transform: translateY(4px) scale(.99);
+  transition: opacity 120ms var(--ease-out), transform 120ms var(--ease-out);
 }
 
 .modal {
@@ -1600,6 +1702,13 @@ dt {
   background: var(--bg-1);
   box-shadow: var(--shadow-overlay);
   overflow: hidden;
+  /* 弹窗不从 0 开始、也不从边缘飞进来：它就在视口正中长出来。
+     transform-origin 保持默认 center，因为弹窗不锚定任何触发元素。 */
+  animation: modal-in 200ms var(--ease-out);
+}
+
+@keyframes modal-in {
+  from { opacity: 0; transform: translateY(8px) scale(.98); }
 }
 
 .modal:focus {
@@ -1719,12 +1828,17 @@ dt {
   background: var(--bg-2);
   font-size: var(--t-body);
   color: var(--text-2);
-  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease),
+    transform 110ms var(--ease-press);
 }
 
 .opt:hover {
   background: var(--bg-3);
   color: var(--text-1);
+}
+
+.opt:active {
+  transform: scale(.96);
 }
 
 .opt.is-active {
@@ -1875,7 +1989,22 @@ dt {
 .sch-time {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--s2);
+}
+
+/* 时刻快捷项：相对时间（几分钟后），不是固定的钟点。放得下就接在秒后面，
+   放不下就整行换到左边，不从右侧飘着。 */
+.sch-time__quick {
+  display: flex;
+  gap: var(--s1);
+}
+
+.sch-time__quick .opt {
+  height: 24px;
+  padding: 0 var(--s2);
+  font-size: var(--t-micro);
+  font-variant-numeric: tabular-nums;
 }
 
 .sch-time__cap {
@@ -1906,6 +2035,14 @@ dt {
   padding: var(--s2) var(--s3);
   border-radius: var(--r);
   background: var(--bg-2);
+}
+
+/* 已启动 / 解锁中的任务：取消按钮换成一行说明，位置和按钮一致，行高不跳 */
+.sch-job__lock {
+  flex: none;
+  font-size: var(--t-micro);
+  color: var(--text-3);
+  white-space: nowrap;
 }
 
 .sch-job__main {
@@ -1978,10 +2115,16 @@ dt {
   border-radius: var(--r);
   cursor: pointer;
   user-select: none;
+  transition: background var(--dur) var(--ease), transform 110ms var(--ease-press);
 }
 
 .sch-game:hover {
   background: var(--bg-3);
+}
+
+.sch-game:active {
+  background: var(--bg-3);
+  transform: scale(.995);
 }
 
 .sch-game__box {
@@ -2028,6 +2171,13 @@ dt {
   text-overflow: ellipsis;
 }
 
+/* 弹窗里的「正在读取…」：转圈和文字排一行，别让两种状态长得一样 */
+.sch-loading {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
 /* 指定成就：搜索框 + 可滚动的勾选列表（随机解锁 / 定时解锁共用） --------- */
 
 .sch-ach-search {
@@ -2052,10 +2202,16 @@ dt {
   border-radius: var(--r);
   cursor: pointer;
   user-select: none;
+  transition: background var(--dur) var(--ease), transform 110ms var(--ease-press);
 }
 
 .sch-ach:hover {
   background: var(--bg-3);
+}
+
+.sch-ach:active {
+  background: var(--bg-3);
+  transform: scale(.995);
 }
 
 .sch-ach__box {
@@ -2102,6 +2258,10 @@ dt {
   color: var(--text-1);
 }
 
+.chip--icon:active {
+  transform: scale(.92);
+}
+
 /* 设置弹窗里的入口列表 */
 .set-list {
   display: flex;
@@ -2123,11 +2283,15 @@ dt {
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: background var(--dur) var(--ease);
+  transition: background var(--dur) var(--ease), transform 110ms var(--ease-press);
 }
 
 .set-row:hover {
   background: var(--bg-3);
+}
+
+.set-row:active {
+  transform: scale(.99);
 }
 
 .set-row:focus-visible {
@@ -2190,6 +2354,11 @@ dt {
 
 .btn.is-busy {
   cursor: progress;
+}
+
+/* 忙但没禁用（aria-disabled）：还看得见、还 Tab 得到，只是点了会提示「正在进行」 */
+.btn[aria-disabled="true"] {
+  opacity: .55;
 }
 
 /* 关于：版本行 + 操作按钮 + 更新结果 */
@@ -2294,6 +2463,10 @@ dt {
   color: var(--text-1);
 }
 
+.chip--schedule:active {
+  transform: scale(.96);
+}
+
 .chip--schedule[hidden] {
   display: none;
 }
@@ -2318,8 +2491,9 @@ dt {
   background-color: var(--bg-3);
 }
 
+/* hover 提亮：用两个既有 token 混出来，不再硬编码色值（这是全文件最后一处越界色） */
 ::-webkit-scrollbar-thumb:hover {
-  background-color: #33333a;
+  background-color: color-mix(in srgb, var(--bg-3), var(--text-3) 28%);
 }
 
 /* ---------------------------------------------------------------------------
@@ -2451,12 +2625,38 @@ dt {
   }
 }
 
+/* 减弱动效不等于「全部关掉」：位移和缩放会引起眩晕，必须去掉；
+   透明度和颜色变化帮助理解「什么变了」，留着更好。 */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     animation-duration: 1ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 1ms !important;
+    transition-property: opacity, background-color, color, border-color, box-shadow !important;
+    transition-duration: 120ms !important;
+  }
+
+  /* 弹窗只淡入淡出，不位移也不缩放 */
+  .modal,
+  .modal-root.is-closing .modal {
+    animation: none !important;
+    transform: none !important;
+  }
+
+  /* 按下反馈靠背景色，不靠缩小 */
+  .btn:active:not(:disabled),
+  .opt:active,
+  .seg__item:active,
+  .winbtn:active,
+  .chip--icon:active,
+  .chip--schedule:active,
+  .search__clear:active,
+  .set-row:active,
+  .ach:active,
+  .game-card:active,
+  .sch-game:active,
+  .sch-ach:active {
+    transform: none !important;
   }
 }

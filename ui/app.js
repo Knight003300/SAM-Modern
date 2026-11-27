@@ -130,6 +130,10 @@
 
   var els = {};
   var modalState = null;
+  // 最后一个真正被聚焦过的元素。用来兜底「关闭弹窗后焦点该回哪」：
+  // 用鼠标点按钮时 WebView2 有时不把焦点给按钮，activeElement 还是 body，
+  // 直接把焦点「还给 body」等于什么都没还，键盘用户会掉出文档流。
+  var lastFocusEl = null;
   var saveGuard = 0;
   var handshakeSeen = false;
   var paintedSent = false;
@@ -654,11 +658,21 @@
     var u = state.game.unlock || { active: false, done: 0, total: 0, next: 0 };
     var show = state.mode === 'game' && u.active;
     setHidden(els.unlockBar, !show);
-    if (els.btnRandom) els.btnRandom.disabled = !!show;
+    // 解锁进行中不能再来一轮，但不用 disabled：用户刚点完这个按钮，把它 disabled
+    // 会把焦点甩到 body（键盘用户直接失位）。改成 aria-disabled + 忙碌光标，
+    // 点下去由 onRandomUnlock 里的守卫给一句提示。
+    if (els.btnRandom) {
+      els.btnRandom.disabled = false;
+      els.btnRandom.classList.toggle('is-busy', !!show);
+      els.btnRandom.setAttribute('aria-disabled', show ? 'true' : 'false');
+    }
     if (!show) return;
 
     var pct = u.total > 0 ? (u.done / u.total) * 100 : 0;
-    if (els.unlockBarFill) els.unlockBarFill.style.width = Math.max(0, Math.min(100, pct)) + '%';
+    // 只改 transform：width 会让每一帧都重新布局整条工具行
+    if (els.unlockBarFill) {
+      els.unlockBarFill.style.transform = 'scaleX(' + (Math.max(0, Math.min(100, pct)) / 100) + ')';
+    }
     if (els.unlockBarText) {
       var text = (u.manual ? '指定解锁中：' : '随机解锁中：') + u.done + ' / ' + u.total + ' 个成就';
       if (u.next > 0) text += '，下一个约 ' + fmtGap(u.next) + '后';
@@ -1215,7 +1229,7 @@
     els.progTotal.textContent = String(p.total);
     els.progPct.textContent = (pct % 1 === 0 ? String(Math.round(pct)) : pct.toFixed(1)) + '%';
     els.progRest.textContent = '剩余 ' + (p.total - p.unlocked) + ' 项';
-    els.progFill.style.width = (ratio * 100) + '%';
+    els.progFill.style.transform = 'scaleX(' + ratio + ')';
 
     // 这三项以前是「成就进度 / 统计项目 / 待保存改动」，分别和上方大数字、
     // meta 行、右上角保存按钮重复。改成左栏独有的两条：什么时候解锁的、有多少稀有成就。
@@ -1286,34 +1300,12 @@
     renderSideFacts();
   }
 
-  /* 首帧只排可见的那十几张卡：一个游戏动辄 300+ 成就，一次性 innerHTML
-     会让浏览器对整表做样式计算与布局，实测首帧多花 150~200ms，正好卡在
-     「窗口该亮了」的关键路径上。剩下的卡片在首帧之后分块追加，用户看不到
-     （都在滚动条下方），但窗口能提前亮起来。 */
-  var ACH_FIRST_CHUNK = 24;
-  var achRenderToken = 0;
-
+  /* 一次渲染整表，屏幕外的行由 .ach 上的 content-visibility 跳过布局与绘制。
+     以前的 JS 分块追加要跑几十次 setTimeout，滚动时还能看到列表「越滚越长」；
+     现在浏览器只排可视区那十几行，首帧开销同样低，而且没有中间态。 */
   function renderAchGrid(list) {
-    var token = ++achRenderToken;
-    if (list.length <= ACH_FIRST_CHUNK) {
-      els.achGrid.innerHTML = list.map(achCardHtml).join('');
-      markLoadedImages();
-      return;
-    }
-    els.achGrid.innerHTML = list.slice(0, ACH_FIRST_CHUNK).map(achCardHtml).join('');
+    els.achGrid.innerHTML = list.map(achCardHtml).join('');
     markLoadedImages();
-    var index = ACH_FIRST_CHUNK;
-    function step() {
-      if (token !== achRenderToken) return;
-      var end = Math.min(index + 64, list.length);
-      var html = '';
-      for (var i = index; i < end; i++) html += achCardHtml(list[i], i);
-      els.achGrid.insertAdjacentHTML('beforeend', html);
-      index = end;
-      if (index < list.length) setTimeout(step, 0);
-      else markLoadedImages();
-    }
-    setTimeout(step, 0);
   }
 
   function renderStats() {
@@ -1359,9 +1351,10 @@
       window.clearTimeout(timer);
       if (el.classList.contains('is-out')) return;
       el.classList.add('is-out');
+      // 和 .toast.is-out 的 140ms 退场对齐，别提前把节点抽走（否则会看到闪一下）
       window.setTimeout(function () {
         if (el.parentElement) el.parentElement.removeChild(el);
-      }, 240);
+      }, 160);
     }
 
     var closeBtn = el.querySelector('.toast__close');
@@ -1378,6 +1371,7 @@
 
   function openModal(opts) {
     closeModal();
+    cancelModalClose();
     var o = opts || {};
     var danger = o.danger !== false;
     var showCancel = o.showCancel !== false;
@@ -1410,7 +1404,7 @@
     parts.push('</div>');
     el.innerHTML = parts.join('');
 
-    var prevFocus = document.activeElement;
+    var prevFocus = focusReturnTarget();
     var okBtn = el.querySelector('[data-role="ok"]');
     var cancelBtn = el.querySelector('[data-role="cancel"]');
 
@@ -1431,10 +1425,19 @@
 
     // 焦点给弹窗本身而不是「确认」按钮：程序化聚焦会画出焦点环，
     // 在破坏性操作的红色按钮上像一层发光描边。键盘用户 Tab 到按钮时仍有焦点环。
-    el.setAttribute('tabindex', '-1');
-    window.setTimeout(function () {
-      try { el.focus({ preventScroll: true }); } catch (err) { /* 忽略 */ }
-    }, 30);
+    focusDialog(el);
+  }
+
+  // 退场动画的收尾句柄：closeModal 里排一个 120ms 的定时器，
+  // 期间又打开新弹窗时把它取消掉，否则新弹窗会被清空。
+  var modalCloseTimer = 0;
+
+  function cancelModalClose() {
+    if (modalCloseTimer) {
+      window.clearTimeout(modalCloseTimer);
+      modalCloseTimer = 0;
+    }
+    els.modalRoot.classList.remove('is-closing');
   }
 
   function closeModal() {
@@ -1455,8 +1458,15 @@
       modalState.clock = null;
     }
     modalState = null;
-    els.modalRoot.innerHTML = '';
-    setHidden(els.modalRoot, true);
+    // 先让节点播 120ms 退场（遮罩淡出 + 弹窗下沉），再把 DOM 清空。
+    // 焦点立刻还给来源元素：它不属于弹窗，不需要等动画。
+    els.modalRoot.classList.add('is-closing');
+    modalCloseTimer = window.setTimeout(function () {
+      modalCloseTimer = 0;
+      els.modalRoot.classList.remove('is-closing');
+      els.modalRoot.innerHTML = '';
+      setHidden(els.modalRoot, true);
+    }, 120);
     if (prev && typeof prev.focus === 'function') {
       try { prev.focus(); } catch (err) { /* 忽略 */ }
     }
@@ -1950,7 +1960,7 @@
     parts.push('</div>');
     el.innerHTML = parts.join('');
 
-    var prevFocus = document.activeElement;
+    var prevFocus = focusReturnTarget();
 
     var customBox = el.querySelector('[data-role="customGap"]');
     var gapHint = el.querySelector('[data-role="gapHint"]');
@@ -2160,10 +2170,7 @@
     setHidden(els.modalRoot, false);
     modalState = { el: el, prevFocus: prevFocus };
     syncSummary();
-    window.setTimeout(function () {
-      var ok = el.querySelector('[data-role="ok"]');
-      if (ok && ok.focus) ok.focus();
-    }, 30);
+    focusDialog(el);
   }
 
   function startRandomUnlock(cfg) {
@@ -2320,6 +2327,13 @@
      10.5 定时解锁（指定某一分钟开始，到点自动执行）
      --------------------------------------------------------------------------- */
 
+  // 解锁节奏：立刻（间隔 0，worker 连着写完）/ 按间隔（下面再选快慢）。
+  // 单独一层是因为「这一秒全解锁」和「隔多久解锁一个」是两种意图，不是同一根滑杆的两端。
+  var PACE_OPTIONS = [
+    { label: '立刻全部解锁' },
+    { label: '按间隔逐个解锁' }
+  ];
+
   // 批量定时里每个游戏解锁多少个：游戏库阶段拿不到各游戏的候选数，只能给固定档位
   var SCHEDULE_BATCH_COUNTS = [
     { value: 0, label: '全部剩余' },
@@ -2436,10 +2450,11 @@
     return out;
   }
 
-  // 定时解锁的间隔档：第一档「立刻解锁」间隔为 0（worker 会连着写完，不等待），
-  // 后面三个沿用随机解锁的内置档；自定义四段输入只在随机解锁弹窗里有入口。
+  // 定时解锁的间隔档：沿用随机解锁的前三档（快速 / 标准 / 缓慢）。
+  // 「立刻解锁」不在这里 —— 它跟「间隔多少秒」不是一回事，提到上面的「解锁节奏」层，
+  // 选它时整个间隔组收起，少一组要读。
   function schedGaps() {
-    return [{ label: '立刻解锁', min: 0, max: 0 }].concat(RANDOM_GAPS.slice(0, 3));
+    return RANDOM_GAPS.slice(0, 3);
   }
 
   function isInstantGap(gap) {
@@ -2458,6 +2473,25 @@
     if (high <= 0) return '不到 1 秒';
     if (low === high) return fmtGap(low);
     return fmtGap(low) + ' – ' + fmtGap(high);
+  }
+
+  // 时刻快捷项：按「几分钟后」设相对时间。手算「现在几点 + 5 分钟」比直接点一下慢得多，
+  // 而定时解锁最常见的意图就是「过几分钟」。按钮只带偏移量，具体钟点在点击时按当前时间算。
+  var TIME_QUICKS = [
+    { min: 1, label: '1 分钟后' },
+    { min: 5, label: '5 分钟后' },
+    { min: 30, label: '30 分钟后' },
+    { min: 60, label: '1 小时后' }
+  ];
+
+  function timeQuickHtml() {
+    var h = ['<div class="sch-time__quick">'];
+    for (var i = 0; i < TIME_QUICKS.length; i++) {
+      h.push('<button type="button" class="opt" data-role="quick" data-min="' + TIME_QUICKS[i].min + '">' +
+        TIME_QUICKS[i].label + '</button>');
+    }
+    h.push('</div>');
+    return h.join('');
   }
 
   // 时刻输入行：时 / 分 / 秒三个数字框（精确到某一秒）
@@ -2479,8 +2513,20 @@
       '" data-role="second" aria-label="解锁时刻的秒" />');
     h.push('<span class="gap-custom__suffix">秒</span>');
     h.push('</label>');
+    h.push(timeQuickHtml());
     h.push('</div>');
     return h.join('');
+  }
+
+  // 「N 分钟后」：按当前时间加偏移，写回三个输入框。秒取整（定时按整秒触发），
+  // 顺手把秒加 1 兜掉「点了按钮、等到 syncAll 时已经过了那一秒」的边界。
+  function applyTimeQuick(btn, hourInput, minuteInput, secondInput) {
+    var add = Number(btn.getAttribute('data-min'));
+    if (!isFinite(add) || add <= 0) add = 5;
+    var d = new Date(Date.now() + add * 60000 + 1000);
+    if (hourInput) hourInput.value = String(d.getHours());
+    if (minuteInput) minuteInput.value = String(d.getMinutes());
+    if (secondInput) secondInput.value = String(d.getSeconds());
   }
 
   // 时刻输入的通用读数 + 收敛：输入框里允许随便打，算的时候夹到合法范围
@@ -2636,9 +2682,16 @@
       h.push('<button type="button" class="btn btn--sm btn--ghost" data-role="run" data-id="' +
         esc(job.id) + '" title="不等原定时刻，现在就拉起解锁进程">立刻开始</button>');
     }
-    var lockTitle = phase === 'heating' ? '解锁进程已经启动，来不及取消了' : '正在解锁，不能取消';
-    h.push('<button type="button" class="btn btn--sm btn--ghost" data-role="drop" data-id="' + esc(job.id) +
-      '"' + (locked ? ' disabled title="' + lockTitle + '"' : '') + '>取消</button>');
+    // 已经启动/正在解锁时不给按钮，改写成一行说明。原来是用 disabled 表达，
+    // 但 disabled 的按钮 Tab 根本走不到，键盘用户既点不动也读不到 title，
+    // 只能看到一个「灰掉的取消」却不知道原因。
+    if (locked) {
+      h.push('<span class="sch-job__lock">' +
+        esc(phase === 'heating' ? '已启动，无法取消' : '解锁中，无法取消') + '</span>');
+    } else {
+      h.push('<button type="button" class="btn btn--sm btn--ghost" data-role="drop" data-id="' +
+        esc(job.id) + '">取消</button>');
+    }
     h.push('</div>');
     return h.join('');
   }
@@ -2669,6 +2722,16 @@
   }
 
   function openScheduleListModal() {
+    // 这个弹窗会因为任务状态变化被整个重建（started/done 事件、取消、立刻开始）。
+    // 重建前记住焦点在哪个按钮上，重建后放回去，否则键盘用户每次都会掉到 body。
+    var keep = null;
+    if (modalState && modalState.kind === 'scheduleList' && modalState.el) {
+      var act = document.activeElement;
+      if (act && modalState.el.contains(act)) {
+        var role = act.getAttribute('data-role');
+        if (role) keep = { role: role, id: act.getAttribute('data-id') || '' };
+      }
+    }
     closeModal();
     var jobs = (state.schedule.jobs || []).slice();
     var el = document.createElement('div');
@@ -2696,7 +2759,7 @@
     parts.push('</div>');
     el.innerHTML = parts.join('');
 
-    var prevFocus = document.activeElement;
+    var prevFocus = focusReturnTarget();
     el.addEventListener('click', function (e) {
       var hit = e.target.closest ? e.target.closest('[data-role]') : null;
       var role = hit ? hit.getAttribute('data-role') : '';
@@ -2745,10 +2808,20 @@
     modalState.tick = window.setInterval(refreshScheduleListMeta, 250);
     // 北京时间精确到毫秒，50ms 刷一次：再快屏幕上也是跳着走的，没必要。
     modalState.clock = window.setInterval(refreshScheduleClocks, 50);
-    window.setTimeout(function () {
-      var close = el.querySelector('[data-role="close"]');
-      if (close && close.focus) close.focus();
-    }, 30);
+    // 首次打开时焦点给弹窗本体（Tab 从第一行任务开始走）；被状态变化重建时
+    // 把焦点还给原来那个按钮，键盘用户不会因为「任务刚好开始了」而失位。
+    if (!keep) {
+      focusDialog(el);
+    } else {
+      window.setTimeout(function () {
+        var target = null;
+        var sel = '[data-role="' + keep.role + '"]';
+        if (keep.id) sel += '[data-id="' + keep.id.replace(/"/g, '\\"') + '"]';
+        target = el.querySelector(sel);
+        if (!target) target = el.querySelector('[data-role="close"]');
+        if (target && target.focus) target.focus();
+      }, 30);
+    }
   }
 
   /* ---------- 提交 ---------- */
@@ -2782,13 +2855,15 @@
   function openScheduleGameModal(pool) {
     closeModal();
     var list = Array.isArray(pool) ? pool : [];
-    var sel = { count: 0, gap: 0, rare: 0, hour: 22, minute: 22, second: 0, mode: 0, order: 0 };
+    var sel = { count: 0, gap: 0, rare: 0, hour: 22, minute: 22, second: 0, mode: 0, order: 0, pace: 0 };
     var picked = {};
     var el = document.createElement('div');
     el.className = 'modal modal--wide';
     el.setAttribute('role', 'dialog');
     el.setAttribute('aria-modal', 'true');
 
+    // 组顺序按「先决定什么，再决定细节」排：时刻 → 节奏 → 解锁什么 → 怎么排。
+    // 「立刻解锁」提到节奏层：它不是「间隔多少秒」的一档，选它时下面的间隔组整组收起。
     var body = [];
     body.push('<div class="modal__head">');
     body.push('<span class="modal__ico modal__ico--info">' + ICON.info + '</span>');
@@ -2799,6 +2874,7 @@
     body.push(timeRowHtml(sel.hour, sel.minute, sel.second));
     body.push('<p class="gap-custom__hint" data-role="timeHint"></p>');
     body.push('</div>');
+    body.push(optGroupHtml('pace', '解锁节奏', PACE_OPTIONS, 0));
     body.push(optGroupHtml('mode', '解锁哪些成就',
       [{ label: '按数量随机' }, { label: '指定成就' }], 0));
     body.push('<div data-role="randomBox">');
@@ -2807,7 +2883,7 @@
     body.push(optGroupHtml('order', '解锁顺序', ORDER_OPTIONS, 0));
     body.push('</div>');
     body.push('<div data-role="achBox" hidden>' + achPickHtml(list, picked) + '</div>');
-    body.push(optGroupHtml('gap', '解锁间隔', schedGaps(), 0));
+    body.push('<div data-role="gapBox">' + optGroupHtml('gap', '解锁间隔', schedGaps(), 0) + '</div>');
 
     var parts = [];
     parts.push('<div class="modal__body">' + body.join('') + '</div>');
@@ -2817,7 +2893,7 @@
     parts.push('</div>');
     el.innerHTML = parts.join('');
 
-    var prevFocus = document.activeElement;
+    var prevFocus = focusReturnTarget();
     var summaryText = el.querySelector('[data-role="summary"]');
     var timeHint = el.querySelector('[data-role="timeHint"]');
     var hourInput = el.querySelector('[data-role="hour"]');
@@ -2826,6 +2902,7 @@
     var okBtn = el.querySelector('[data-role="ok"]');
     var randomBox = el.querySelector('[data-role="randomBox"]');
     var achBox = el.querySelector('[data-role="achBox"]');
+    var gapBox = el.querySelector('[data-role="gapBox"]');
     var pick = bindAchPick(el, list, picked, function () { syncAll(); });
 
     function targetDate() {
@@ -2836,17 +2913,24 @@
       return nextAt(c.hour, c.minute, c.second);
     }
 
+    // 节奏层决定 minGap/maxGap：立刻 = 0/0，按间隔 = 下面选的那一档。
+    function currentGap() {
+      if (sel.pace === 0) return { min: 0, max: 0 };
+      var gaps = schedGaps();
+      return gaps[sel.gap] || gaps[0];
+    }
+
     function syncAll() {
       var target = targetDate();
       var manual = sel.mode === 1;
       setHidden(randomBox, manual);
       setHidden(achBox, !manual);
+      setHidden(gapBox, sel.pace === 0);
       var poolNow = schedPool(list, sel.rare);
       var opts = countOptions(poolNow.length);
       var pickedOpt = opts[sel.count] || opts[0];
       var n = manual ? pick.count() : (pickedOpt.value > 0 ? Math.min(pickedOpt.value, poolNow.length) : poolNow.length);
-      var gaps = schedGaps();
-      var gap = gaps[sel.gap] || gaps[1];
+      var gap = currentGap();
       var delay = Math.min(5, gap.min);
       var totalLow = n > 0 ? delay + (n - 1) * gap.min : 0;
       var totalHigh = n > 0 ? delay + (n - 1) * gap.max : 0;
@@ -2860,6 +2944,7 @@
       var tail = isInstantGap(gap)
         ? '全部在同一秒立刻连续解锁。'
         : gapText(gap) + '，整轮大约 ' + spanText(totalLow, totalHigh) + '。';
+
 
       if (summaryText) {
         if (manual) {
@@ -2902,6 +2987,11 @@
       var role = hit ? hit.getAttribute('data-role') : '';
       if (role === 'achAll') { pick.all(); return; }
       if (role === 'achNone') { pick.none(); return; }
+      if (role === 'quick') {
+        applyTimeQuick(hit, hourInput, minuteInput, secondInput);
+        syncAll();
+        return;
+      }
 
       var opt = e.target.closest ? e.target.closest('.opt') : null;
       if (opt) {
@@ -2929,8 +3019,7 @@
       if (role === 'ok') {
         var manual = sel.mode === 1;
         var target = targetDate();
-        var gaps = schedGaps();
-        var gap = gaps[sel.gap] || gaps[1];
+        var gap = currentGap();
         var base = {
           appId: state.game.appId,
           gameName: state.game.name || ('App ' + state.game.appId),
@@ -2974,9 +3063,7 @@
     setHidden(els.modalRoot, false);
     modalState = { el: el, prevFocus: prevFocus, kind: 'scheduleGame' };
     syncAll();
-    window.setTimeout(function () {
-      if (okBtn && okBtn.focus) okBtn.focus();
-    }, 30);
+    focusDialog(el);
   }
 
   /* ---------- 游戏库：多个游戏同一分钟 ---------- */
@@ -2996,7 +3083,7 @@
 
   function openScheduleBatchModal(games) {
     closeModal();
-    var sel = { gap: 0, count: 0, hour: 22, minute: 22, second: 0, mode: 0, order: 0 };
+    var sel = { gap: 0, count: 0, hour: 22, minute: 22, second: 0, mode: 0, order: 0, pace: 0 };
     var pickedGames = {};   // appId -> true
     var pickedAch = {};     // appId -> { achievementId: true }
     var pools = {};         // appId -> { loading: bool, cached: bool, list: [] }
@@ -3019,9 +3106,10 @@
     body.push('<p class="gap-custom__hint" data-role="timeHint"></p>');
     body.push('</div>');
 
-    body.push(optGroupHtml('mode', '解锁哪些成就',
-      [{ label: '按数量随机' }, { label: '指定成就' }], 0));
+    body.push(optGroupHtml('pace', '解锁节奏', PACE_OPTIONS, 0));
 
+    // 选游戏提到模式之前：批量定时第一件事就是「哪些游戏」，原来夹在模式和成就列表中间，
+    // 指定成就模式下要来回滚两次才能确认自己选了什么。
     body.push('<div class="sch-block">');
     body.push('<div class="sch-block__head">');
     body.push('<span class="opt-group__label">选择游戏（<span data-role="picked">0</span> / ' + games.length + '）</span>');
@@ -3042,6 +3130,9 @@
     body.push('</div>');
     body.push('</div>');
 
+    body.push(optGroupHtml('mode', '解锁哪些成就',
+      [{ label: '按数量随机' }, { label: '指定成就' }], 0));
+
     body.push('<div data-role="randomBox">');
     body.push(optGroupHtml('count', '每个游戏解锁', SCHEDULE_BATCH_COUNTS, 0));
     body.push(optGroupHtml('order', '解锁顺序', ORDER_OPTIONS, 0));
@@ -3057,7 +3148,7 @@
     body.push('</div>');
     body.push('</div>');
 
-    body.push(optGroupHtml('gap', '解锁间隔', schedGaps(), 0));
+    body.push('<div data-role="gapBox">' + optGroupHtml('gap', '解锁间隔', schedGaps(), 0) + '</div>');
 
     var parts = [];
     parts.push('<div class="modal__body">' + body.join('') + '</div>');
@@ -3067,7 +3158,7 @@
     parts.push('</div>');
     el.innerHTML = parts.join('');
 
-    var prevFocus = document.activeElement;
+    var prevFocus = focusReturnTarget();
     var summaryText = el.querySelector('[data-role="summary"]');
     var timeHint = el.querySelector('[data-role="timeHint"]');
     var hourInput = el.querySelector('[data-role="hour"]');
@@ -3077,6 +3168,7 @@
     var gamesBox = el.querySelector('[data-role="games"]');
     var randomBox = el.querySelector('[data-role="randomBox"]');
     var achBox = el.querySelector('[data-role="achBox"]');
+    var gapBox = el.querySelector('[data-role="gapBox"]');
     var achGamesBox = el.querySelector('[data-role="achGames"]');
     var achHost = el.querySelector('[data-role="achHost"]');
     var okBtn = el.querySelector('[data-role="ok"]');
@@ -3188,7 +3280,10 @@
         return;
       }
       if (!pool || pool.loading) {
-        achHost.innerHTML = '<p class="gap-custom__hint">正在读取《' + esc(gameName(id)) + '》的成就…</p>';
+        // 读取中给个转圈：纯文字「正在读取…」和「读完了但一个都没有」长得一样，
+        // 用户分不清该等还是该换游戏。
+        achHost.innerHTML = '<p class="gap-custom__hint sch-loading">' +
+          '<span class="spinner spinner--sm"></span>正在读取《' + esc(gameName(id)) + '》的成就…</p>';
         return;
       }
       if (!pool.cached) {
@@ -3209,14 +3304,20 @@
       });
     }
 
+    function currentGap() {
+      if (sel.pace === 0) return { min: 0, max: 0 };
+      var gaps = schedGaps();
+      return gaps[sel.gap] || gaps[0];
+    }
+
     function syncAll() {
       var target = targetDate();
       var manual = sel.mode === 1;
       setHidden(randomBox, manual);
       setHidden(achBox, !manual);
+      setHidden(gapBox, sel.pace === 0);
       var ids = pickedIdList();
-      var gaps = schedGaps();
-      var gap = gaps[sel.gap] || gaps[0];
+      var gap = currentGap();
       var countOpt = SCHEDULE_BATCH_COUNTS[sel.count] || SCHEDULE_BATCH_COUNTS[0];
       var clock = clockShort(target);
 
@@ -3295,6 +3396,11 @@
         }
         return;
       }
+      if (role === 'quick') {
+        applyTimeQuick(hit, hourInput, minuteInput, secondInput);
+        syncAll();
+        return;
+      }
       if (role === 'all' || role === 'none') {
         if (gamesBox) {
           var boxes = gamesBox.querySelectorAll('.sch-game__box');
@@ -3325,8 +3431,7 @@
         }
         var manual = sel.mode === 1;
         var target = targetDate();
-        var gaps = schedGaps();
-        var gap = gaps[sel.gap] || gaps[0];
+        var gap = currentGap();
         var countOpt = SCHEDULE_BATCH_COUNTS[sel.count] || SCHEDULE_BATCH_COUNTS[0];
         var missing = [];
         if (manual) {
@@ -3396,9 +3501,7 @@
     setHidden(els.modalRoot, false);
     modalState = { el: el, prevFocus: prevFocus, kind: 'scheduleBatch', poolHandler: poolHandler };
     syncAll();
-    window.setTimeout(function () {
-      if (okBtn && okBtn.focus) okBtn.focus();
-    }, 30);
+    focusDialog(el);
   }
 
   /* ---------------------------------------------------------------------------
@@ -3894,7 +3997,7 @@
     parts.push('</div>');
     el.innerHTML = parts.join('');
 
-    var prevFocus = document.activeElement;
+    var prevFocus = focusReturnTarget();
     var input = el.querySelector('[data-role="appid"]');
     var okBtn = el.querySelector('[data-role="ok"]');
     var hint = el.querySelector('[data-role="hint"]');
@@ -4075,7 +4178,7 @@
   // 「设置 → 关于 → 赞赏」是一个小层级：换页时沿用最初那次的焦点来源，
   // 一路退回来焦点仍落在标题栏的齿轮上，而不是停在已经销毁的节点上。
   function swapModal(el, kind, extra) {
-    var prevFocus = modalState ? modalState.prevFocus : document.activeElement;
+    var prevFocus = modalState ? modalState.prevFocus : focusReturnTarget();
     // 用鼠标点齿轮时 WebView2 不一定会把焦点放到按钮上，activeElement 可能还是 body。
     // 这种情况下退回到齿轮本身，关闭弹窗后焦点才有个像样的落点。
     if (!modalState && (!prevFocus || prevFocus === document.body || prevFocus === document.documentElement)) {
@@ -4085,6 +4188,7 @@
       if (modalState.tick) { window.clearInterval(modalState.tick); modalState.tick = null; }
       if (modalState.clock) { window.clearInterval(modalState.clock); modalState.clock = null; }
     }
+    cancelModalClose();
     els.modalRoot.innerHTML = '';
     els.modalRoot.appendChild(el);
     setHidden(els.modalRoot, false);
@@ -4097,6 +4201,28 @@
     }
     modalState = next;
     return next;
+  }
+
+  // 弹窗打开时的焦点：给弹窗本体（tabindex="-1"），不是某个按钮。
+  // 理由：一打开就把焦点放在「排入定时」上，用户按一下 Enter 就拿默认值提交了，
+  // 时刻、成就这些必填项全被跳过；放在弹窗本体，Tab 会按 DOM 顺序从第一个控件开始走。
+  // 30ms 后再聚焦：节点刚插进 DOM，立刻聚焦在部分 WebView2 版本上会被吞掉。
+  // 关弹窗时的焦点落点：优先当前聚焦元素，退到「最后一个被聚焦过的元素」。
+  // 弹窗内的元素不算——它们马上会被移除，把焦点还过去等于还给了空气。
+  function focusReturnTarget() {
+    var root = els.modalRoot;
+    var a = document.activeElement;
+    if (a && a !== document.body && a !== document.documentElement && !(root && root.contains(a))) return a;
+    if (lastFocusEl && document.contains(lastFocusEl) && !(root && root.contains(lastFocusEl))) return lastFocusEl;
+    return null;
+  }
+
+  function focusDialog(el) {
+    if (!el) return;
+    if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
+    window.setTimeout(function () {
+      try { el.focus({ preventScroll: true }); } catch (err) { /* 忽略 */ }
+    }, 30);
   }
 
   // 30ms 后再聚焦：节点刚插进 DOM，立刻聚焦在部分 WebView2 版本上会被吞掉。
@@ -4473,6 +4599,9 @@
   var FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])';
 
   // 弹窗是 aria-modal 的：Tab 不能跑到背后的页面上，否则焦点看不见、Enter 还会误触底层按钮。
+  // 注意焦点可能在弹窗本体上（tabindex="-1"，打开时的默认落点）：这时它既不是
+  // first 也不是 last，但 Tab / Shift+Tab 都必须手动送去首/末项，否则浏览器会
+  // 顺着 DOM 往外跑，直接穿出弹窗。
   function trapTab(e) {
     var nodes = Array.prototype.slice.call(els.modalRoot.querySelectorAll(FOCUSABLE)).filter(function (n) {
       return n.offsetParent !== null || n === document.activeElement;
@@ -4481,10 +4610,16 @@
     var first = nodes[0];
     var last = nodes[nodes.length - 1];
     var active = document.activeElement;
-    if (!e.shiftKey && (active === last || !els.modalRoot.contains(active))) {
+    var inside = active && nodes.indexOf(active) >= 0;
+    if (!inside) {
+      e.preventDefault();
+      (e.shiftKey ? last : first).focus({ preventScroll: true });
+      return;
+    }
+    if (!e.shiftKey && active === last) {
       e.preventDefault();
       first.focus({ preventScroll: true });
-    } else if (e.shiftKey && (active === first || !els.modalRoot.contains(active))) {
+    } else if (e.shiftKey && active === first) {
       e.preventDefault();
       last.focus({ preventScroll: true });
     }
@@ -4623,6 +4758,23 @@
     bindImageFallback();
     bindKeys();
 
+    // 记住最后一个被聚焦过的元素：鼠标点按钮时 WebView2 不一定会把焦点给按钮，
+    // 关弹窗时 activeElement 可能还是 body。有这份记录就能把焦点还到正确的地方。
+    document.addEventListener('focusin', function (e) {
+      var t = e.target;
+      if (t && t !== document.body && t !== document.documentElement) lastFocusEl = t;
+    }, true);
+    // 鼠标按下也算「用户从这里进来的」：WebView2 里用鼠标点按钮不一定会先给焦点，
+    // 只靠 focusin 会漏掉「用鼠标点开弹窗、再用 Esc 关掉」这条最常见的路径。
+    // 弹窗内部的按下不记：那些元素关掉就没了。
+    document.addEventListener('mousedown', function (e) {
+      var t = e.target;
+      if (!t || !t.closest) return;
+      if (els.modalRoot && els.modalRoot.contains(t)) return;
+      var hit = t.closest('button, .set-row, .ach, .game-card, .opt, .sch-job, .sch-game, .sch-ach');
+      if (hit) lastFocusEl = hit;
+    }, true);
+
     // 游戏页是另一个进程：它写进 localStorage 的进度，游戏库这边要等窗口被唤回
     // 才看得到。这里在窗口重新获得焦点时对比一次，只有真的变了才重画卡片。
     window.addEventListener('focus', function () {
@@ -4658,7 +4810,7 @@
   }
 
   window.SAM = {
-    version: '1.9.10',
+    version: '1.9.11',
     handleEvent: handleEvent,
     mock: enterMock,
     getState: function () {

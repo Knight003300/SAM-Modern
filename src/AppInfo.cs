@@ -13,7 +13,7 @@ namespace SAM.Modern
     /// </summary>
     internal static class AppInfo
     {
-        public const string Version = "1.9.10";
+        public const string Version = "1.9.11";
         public const string ReleasesUrl = "https://github.com/Knight003300/SAM-Modern/releases/latest";
         private const string LatestApi = "https://api.github.com/repos/Knight003300/SAM-Modern/releases/latest";
 
